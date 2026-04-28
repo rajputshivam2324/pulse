@@ -1,0 +1,17 @@
+fastapi
+uvicorn[standard]
+httpx
+supabase
+redis[asyncio]
+langchain
+langgraph
+langchain-nvidia-ai-endpoints
+langchain-core
+pydantic
+python-jose[cryptography]
+anchorpy
+solana
+solders
+python-dotenv
+pytest
+pytest-asyncio

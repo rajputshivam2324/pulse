@@ -1,0 +1,20 @@
+[toolchain]
+
+[features]
+seeds = true
+skip-lint = false
+
+[programs.devnet]
+pulse_subscription = "6qVHRzwu1CuDgaCmtaZZwG1sKv1uEjBKkHUA62UYxsww"
+
+[programs.localnet]
+pulse_subscription = "3UAr7wLdjwjs4PASQzu5snfTa9dgdbUuX7bSg7Z3pjbb"
+
+[provider]
+cluster = "devnet"
+wallet = "~/.config/solana/id.json"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+
+[hooks]
