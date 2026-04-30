@@ -39,7 +39,7 @@ async def get_transactions_for_address(
     nativeTransfers, tokenTransfers, accountData, instructions.
     """
     url = f"{HELIUS_BASE}/addresses/{address}/transactions"
-    params = {"api-key": HELIUS_API_KEY, "limit": limit, "type": "ANY"}
+    params = {"api-key": HELIUS_API_KEY, "limit": limit}
     if before:
         params["before"] = before
 
@@ -54,7 +54,7 @@ async def get_transactions_for_address(
         return response.json()
 
 
-async def get_all_transactions(address: str, max_pages: int = 50) -> list[dict]:
+async def get_all_transactions(address: str, max_pages: int = 10) -> list[dict]:
     """
     Paginate through complete transaction history.
     First tries Helius Enhanced API, then falls back to Solana RPC for devnet.

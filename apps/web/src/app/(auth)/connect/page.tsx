@@ -1,16 +1,16 @@
 'use client'
 
-/**
- * Wallet Connect Page
- * Sign In With Solana (SIWS) — no email, no password.
- */
-
+import dynamic from 'next/dynamic'
 import { useWallet } from '@solana/wallet-adapter-react'
-import { WalletMultiButton } from '@solana/wallet-adapter-react-ui'
 import { useRouter } from 'next/navigation'
 import { useEffect, useState } from 'react'
 import { signInWithSolana } from '@/lib/auth'
 import { usePulseStore } from '@/store'
+
+const WalletMultiButton = dynamic(
+  () => import('@solana/wallet-adapter-react-ui').then((mod) => mod.WalletMultiButton),
+  { ssr: false }
+)
 
 export default function ConnectPage() {
   const { publicKey, signMessage, connected } = useWallet()

@@ -1,8 +1,8 @@
 'use client'
 
 /**
- * Dashboard Chart Components
- * DAW Area Chart, Transaction Funnel, Retention Cohort Grid, Metric Cards
+ * Dashboard Chart Components — Premium Warm Design
+ * Cream / Rose / Charcoal Palette
  */
 
 import {
@@ -24,27 +24,27 @@ import {
 
 interface MetricCardProps {
   label: string
-  value: string | number
+  value: string | number | React.ReactNode
   subtext?: string
   trend?: 'up' | 'down' | 'neutral'
 }
 
 export function MetricCard({ label, value, subtext, trend }: MetricCardProps) {
-  const trendColor =
-    trend === 'up' ? '#22c55e' : trend === 'down' ? '#ef4444' : 'var(--color-text-muted)'
+  const trendColor = trend === 'up' ? '#2C2420' : trend === 'down' ? '#B5623E' : '#7A6860'
   const trendIcon = trend === 'up' ? '↑' : trend === 'down' ? '↓' : ''
 
   return (
-    <div className="metric-card">
-      <p className="text-xs font-medium mb-1" style={{ color: 'var(--color-text-muted)' }}>
+    <div className="metric-card animate-scale-in hover:scale-[1.02] transition-all duration-300" style={{ transformOrigin: 'center top' }}>
+      <p className="text-xs font-medium mb-1" style={{ color: '#7A6860' }}>
         {label}
       </p>
-      <p className="text-2xl font-bold" style={{ color: 'var(--color-text-primary)' }}>
+      <p className="text-2xl font-serif font-bold" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
         {value}
       </p>
       {subtext && (
-        <p className="text-xs mt-1" style={{ color: trendColor }}>
-          {trendIcon} {subtext}
+        <p className="text-xs mt-1.5 flex items-center gap-1 animate-fade-in" style={{ color: trendColor }}>
+          {trendIcon && <span>{trendIcon}</span>}
+          {subtext}
         </p>
       )}
     </div>
@@ -67,14 +67,11 @@ interface DAWChartProps {
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload) return null
   return (
-    <div
-      className="glass rounded-lg px-3 py-2 text-xs"
-      style={{ background: 'var(--color-bg-elevated)', border: '1px solid var(--color-border-default)' }}
-    >
-      <p className="font-medium mb-1" style={{ color: 'var(--color-text-primary)' }}>{label}</p>
+    <div className="glass rounded-lg px-3 py-2 text-xs" style={{ background: '#EDE3D4', border: '1px solid rgba(180,140,120,0.35)' }}>
+      <p className="font-serif font-medium mb-1" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>{label}</p>
       {payload.map((entry: any) => (
         <p key={entry.dataKey} style={{ color: entry.color }}>
-          {entry.name}: {entry.value}
+          {entry.name}: {entry.value?.toLocaleString()}
         </p>
       ))}
     </div>
@@ -83,32 +80,44 @@ const CustomTooltip = ({ active, payload, label }: any) => {
 
 export function DAWChart({ data }: DAWChartProps) {
   return (
-    <div className="card p-5">
-      <h3 className="text-sm font-semibold mb-4" style={{ color: 'var(--color-text-primary)' }}>
-        Daily Active Wallets (30d)
-      </h3>
-      <div style={{ height: 260 }}>
+    <div className="card p-5 animate-scale-in">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-serif font-semibold" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
+          Daily Active Wallets (30d)
+        </h3>
+        <div className="flex items-center gap-3 text-xs" style={{ color: '#7A6860' }}>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-[#D4825A]"></span>
+            New
+          </span>
+          <span className="flex items-center gap-1.5">
+            <span className="w-2 h-2 rounded-full bg-[#E8B89A]"></span>
+            Returning
+          </span>
+        </div>
+      </div>
+      <div style={{ height: 280 }}>
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <defs>
               <linearGradient id="gradNew" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="#8b5cf6" stopOpacity={0} />
+                <stop offset="5%" stopColor="#D4825A" stopOpacity={0.25} />
+                <stop offset="95%" stopColor="#D4825A" stopOpacity={0} />
               </linearGradient>
               <linearGradient id="gradReturn" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#06b6d4" stopOpacity={0.3} />
-                <stop offset="95%" stopColor="#06b6d4" stopOpacity={0} />
+                <stop offset="5%" stopColor="#E8B89A" stopOpacity={0.25} />
+                <stop offset="95%" stopColor="#E8B89A" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border-subtle)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(180,140,120,0.2)" />
             <XAxis
               dataKey="date"
-              tick={{ fill: 'var(--color-text-muted)', fontSize: 10 }}
+              tick={{ fill: '#7A6860', fontSize: 10 }}
               tickLine={false}
-              axisLine={{ stroke: 'var(--color-border-subtle)' }}
+              axisLine={{ stroke: 'rgba(180,140,120,0.2)' }}
             />
             <YAxis
-              tick={{ fill: 'var(--color-text-muted)', fontSize: 10 }}
+              tick={{ fill: '#7A6860', fontSize: 10 }}
               tickLine={false}
               axisLine={false}
             />
@@ -118,7 +127,7 @@ export function DAWChart({ data }: DAWChartProps) {
               dataKey="new_wallets"
               name="New"
               stackId="1"
-              stroke="#8b5cf6"
+              stroke="#D4825A"
               fill="url(#gradNew)"
               strokeWidth={2}
             />
@@ -127,20 +136,12 @@ export function DAWChart({ data }: DAWChartProps) {
               dataKey="returning_wallets"
               name="Returning"
               stackId="1"
-              stroke="#06b6d4"
+              stroke="#E8B89A"
               fill="url(#gradReturn)"
               strokeWidth={2}
             />
           </AreaChart>
         </ResponsiveContainer>
-      </div>
-      <div className="flex items-center gap-4 mt-3 text-xs" style={{ color: 'var(--color-text-muted)' }}>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full" style={{ background: '#8b5cf6' }} /> New wallets
-        </span>
-        <span className="flex items-center gap-1">
-          <span className="w-2 h-2 rounded-full" style={{ background: '#06b6d4' }} /> Returning
-        </span>
       </div>
     </div>
   )
@@ -160,25 +161,42 @@ interface FunnelChartProps {
 }
 
 export function FunnelChart({ data }: FunnelChartProps) {
-  const colors = ['#8b5cf6', '#7c3aed', '#6d28d9', '#5b21b6', '#4c1d95']
+  const colors = ['#D4825A', '#E8B89A', '#7A6860', '#B5623E', '#8C4A2C']
 
   return (
-    <div className="card p-5">
-      <h3 className="text-sm font-semibold mb-4" style={{ color: 'var(--color-text-primary)' }}>
-        Transaction Funnel
-      </h3>
-      <div style={{ height: 260 }}>
+    <div className="card p-5 animate-scale-in stagger-1" style={{ animationDelay: '150ms' }}>
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="text-sm font-serif font-semibold" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
+          Transaction Funnel
+        </h3>
+        <div className="flex gap-2 flex-wrap">
+          {data.slice(1).map((step) => (
+            <span
+              key={step.step}
+              className="text-xs px-2 py-0.5 rounded-full"
+              style={{
+                background: step.drop_off_rate > 50 ? 'rgba(181,98,62,0.15)' : '#EDE3D4',
+                color: step.drop_off_rate > 50 ? '#B5623E' : '#7A6860',
+                border: `1px solid ${step.drop_off_rate > 50 ? 'rgba(181,98,62,0.3)' : 'rgba(180,140,120,0.2)'}`,
+              }}
+            >
+              Step {step.step}: -{step.drop_off_rate}%
+            </span>
+          ))}
+        </div>
+      </div>
+      <div style={{ height: 280 }}>
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--color-border-subtle)" />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(180,140,120,0.2)" />
             <XAxis
               dataKey="label"
-              tick={{ fill: 'var(--color-text-muted)', fontSize: 10 }}
+              tick={{ fill: '#7A6860', fontSize: 10 }}
               tickLine={false}
-              axisLine={{ stroke: 'var(--color-border-subtle)' }}
+              axisLine={{ stroke: 'rgba(180,140,120,0.2)' }}
             />
             <YAxis
-              tick={{ fill: 'var(--color-text-muted)', fontSize: 10 }}
+              tick={{ fill: '#7A6860', fontSize: 10 }}
               tickLine={false}
               axisLine={false}
             />
@@ -190,21 +208,6 @@ export function FunnelChart({ data }: FunnelChartProps) {
             </Bar>
           </BarChart>
         </ResponsiveContainer>
-      </div>
-      <div className="flex gap-3 mt-3 flex-wrap">
-        {data.slice(1).map((step) => (
-          <span
-            key={step.step}
-            className="text-xs px-2 py-0.5 rounded-full"
-            style={{
-              background: step.drop_off_rate > 50 ? 'var(--color-danger-subtle)' : 'var(--color-bg-elevated)',
-              color: step.drop_off_rate > 50 ? '#fca5a5' : 'var(--color-text-muted)',
-              border: `1px solid ${step.drop_off_rate > 50 ? 'rgba(239,68,68,0.3)' : 'var(--color-border-subtle)'}`,
-            }}
-          >
-            Step {step.step}: -{step.drop_off_rate}%
-          </span>
-        ))}
       </div>
     </div>
   )
@@ -224,16 +227,15 @@ interface RetentionGridProps {
 }
 
 function getHeatmapColor(rate: number): string {
-  if (rate >= 80) return 'rgba(139, 92, 246, 0.7)'
-  if (rate >= 60) return 'rgba(139, 92, 246, 0.5)'
-  if (rate >= 40) return 'rgba(139, 92, 246, 0.35)'
-  if (rate >= 20) return 'rgba(139, 92, 246, 0.2)'
-  if (rate > 0) return 'rgba(139, 92, 246, 0.1)'
-  return 'var(--color-bg-elevated)'
+  if (rate >= 80) return 'rgba(212, 130, 90, 0.5)'
+  if (rate >= 60) return 'rgba(212, 130, 90, 0.35)'
+  if (rate >= 40) return 'rgba(212, 130, 90, 0.25)'
+  if (rate >= 20) return 'rgba(212, 130, 90, 0.15)'
+  if (rate > 0) return 'rgba(212, 130, 90, 0.08)'
+  return '#EDE3D4'
 }
 
 export function RetentionGrid({ data }: RetentionGridProps) {
-  // Group by cohort week
   const cohorts = new Map<string, Array<{ week_number: number; retention_rate: number; wallet_count: number }>>()
   data.forEach((d) => {
     if (!cohorts.has(d.cohort_week)) {
@@ -242,22 +244,22 @@ export function RetentionGrid({ data }: RetentionGridProps) {
     cohorts.get(d.cohort_week)!.push(d)
   })
 
-  const cohortKeys = Array.from(cohorts.keys()).sort().slice(-6) // Last 6 cohorts
+  const cohortKeys = Array.from(cohorts.keys()).sort().slice(-6)
 
   return (
-    <div className="card p-5">
-      <h3 className="text-sm font-semibold mb-4" style={{ color: 'var(--color-text-primary)' }}>
+    <div className="card p-5 animate-scale-in stagger-2" style={{ animationDelay: '300ms' }}>
+      <h3 className="text-sm font-serif font-semibold mb-4" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
         Retention Cohorts
       </h3>
       <div className="overflow-x-auto">
         <table className="w-full text-xs">
           <thead>
             <tr>
-              <th className="text-left px-2 py-1.5 font-medium" style={{ color: 'var(--color-text-muted)' }}>
+              <th className="text-left px-2 py-2 font-medium" style={{ color: '#7A6860' }}>
                 Cohort
               </th>
               {[0, 1, 2, 3, 4].map((w) => (
-                <th key={w} className="text-center px-2 py-1.5 font-medium" style={{ color: 'var(--color-text-muted)' }}>
+                <th key={w} className="text-center px-2 py-2 font-medium" style={{ color: '#7A6860' }}>
                   W{w}
                 </th>
               ))}
@@ -268,22 +270,22 @@ export function RetentionGrid({ data }: RetentionGridProps) {
               const weekData = cohorts.get(week) || []
               return (
                 <tr key={week}>
-                  <td className="px-2 py-1.5 font-mono" style={{ color: 'var(--color-text-secondary)' }}>
+                  <td className="px-2 py-2 font-mono" style={{ color: '#7A6860' }}>
                     {week}
                   </td>
                   {[0, 1, 2, 3, 4].map((wn) => {
                     const cell = weekData.find((d) => d.week_number === wn)
                     const rate = cell?.retention_rate || 0
                     return (
-                      <td key={wn} className="text-center px-2 py-1.5">
+                      <td key={wn} className="text-center px-2 py-2">
                         <span
                           className="inline-block w-full rounded px-2 py-1 font-medium"
                           style={{
                             background: getHeatmapColor(rate),
-                            color: rate > 0 ? 'var(--color-text-primary)' : 'var(--color-text-muted)',
+                            color: rate > 0 ? '#2C2420' : '#7A6860',
                           }}
                         >
-                          {rate > 0 ? `${rate}%` : '-'}
+                          {rate > 0 ? `${rate}%` : '—'}
                         </span>
                       </td>
                     )
