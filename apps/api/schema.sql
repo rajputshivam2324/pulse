@@ -23,6 +23,7 @@ create table programs (
   helius_webhook_id text,                    -- Helius webhook registration ID
   created_at timestamptz default now(),
   last_synced_at timestamptz,
+  last_synced_signature text,               -- Cursor for incremental sync
   unique(user_id, program_address)
 );
 

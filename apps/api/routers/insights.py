@@ -1,24 +1,71 @@
 """
 Insights Router for Pulse.
 Exposes the LangGraph insight pipeline as API endpoints.
+All endpoints require JWT authentication.
 """
 
-from fastapi import APIRouter, HTTPException
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from slowapi import Limiter
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
+from services.auth import require_auth
 from services.ai.graph import insight_pipeline
 from services.ai.state import InsightPipelineState
 from services.cache import cache_get, cache_set, metrics_cache_key, insights_cache_key
+from services.validators import is_valid_solana_address
+from services.supabase import get_supabase
 
 router = APIRouter(prefix="/insights", tags=["insights"])
+logger = logging.getLogger(__name__)
+
+limiter = Limiter(key_func=get_remote_address)
+
+# Plan-gated features
+AI_INIGHTS_PLANS = {"team", "protocol"}
+
+
+async def _check_plan_feature(wallet: str, feature: str) -> bool:
+    """Look up the user's plan from Supabase and check feature access."""
+    try:
+        supabase = get_supabase()
+        result = supabase.table("users").select("plan").eq("wallet_pubkey", wallet).execute()
+        if not result.data:
+            return False
+        plan = result.data[0].get("plan", "free")
+        return plan in AI_INIGHTS_PLANS
+    except Exception:
+        logger.warning("Plan check failed, defaulting to deny", extra={"wallet": wallet})
+        return False
 
 
 @router.post("/generate/{program_id}")
-async def generate_insights(program_id: str, program_name: str = None):
+@limiter.limit("5/hour")
+async def generate_insights(
+    request: Request,
+    program_id: str,
+    wallet: str = Depends(require_auth),
+    program_name: str = Query(None),
+):
     """
     Run the full LangGraph insight pipeline for a program.
     Requires metrics to be computed first (/analytics/sync).
 
     Pipeline: anomaly_detector → ranker → [insight_gen, retention, scorer] → quick_wins → assembler
+
+    Access: Team and Protocol plans only.
     """
+    if not is_valid_solana_address(program_id):
+        raise HTTPException(status_code=400, detail="Invalid Solana address format")
+
+    # Server-side plan check
+    has_access = await _check_plan_feature(wallet, "ai_insights")
+    if not has_access:
+        raise HTTPException(
+            status_code=403,
+            detail="AI Insights require a Team or Protocol plan. Upgrade at /settings.",
+        )
+
     metrics = await cache_get(metrics_cache_key(program_id))
     if not metrics:
         raise HTTPException(
@@ -44,6 +91,7 @@ async def generate_insights(program_id: str, program_name: str = None):
     try:
         result = await insight_pipeline.ainvoke(initial_state)
     except Exception as e:
+        logger.error("Insight pipeline failed", extra={"error": str(e), "program_id": program_id})
         raise HTTPException(
             status_code=500,
             detail=f"Insight pipeline failed: {str(e)}",
@@ -68,8 +116,10 @@ async def generate_insights(program_id: str, program_name: str = None):
 
 
 @router.get("/{program_id}")
-async def get_insights(program_id: str):
+async def get_insights(program_id: str, wallet: str = Depends(require_auth)):
     """Get cached insights for a program."""
+    if not is_valid_solana_address(program_id):
+        raise HTTPException(status_code=400, detail="Invalid Solana address format")
     insights = await cache_get(insights_cache_key(program_id))
     if not insights:
         raise HTTPException(

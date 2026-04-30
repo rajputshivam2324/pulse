@@ -57,15 +57,18 @@ interface PulseStore {
   setPrograms: (programs: ProgramState[]) => void
   setActiveProgram: (program: ProgramState | null) => void
 
-  // Metrics
-  metrics: MetricsState | null
-  setMetrics: (metrics: MetricsState | null) => void
+  // Metrics — keyed by programId
+  metricsByProgram: Record<string, MetricsState | null>
+  getMetrics: (programId: string) => MetricsState | null
+  setMetrics: (programId: string, metrics: MetricsState | null) => void
 
-  // Insights
-  insights: InsightsState | null
-  setInsights: (insights: InsightsState | null) => void
+  // Insights — keyed by programId
+  insightsByProgram: Record<string, InsightsState | null>
+  getInsights: (programId: string) => InsightsState | null
+  setInsights: (programId: string, insights: InsightsState | null) => void
+  clearInsights: (programId: string) => void
 
-  // Loading states
+  // Loading states — keyed by programId
   isSyncing: boolean
   isGeneratingInsights: boolean
   setSyncing: (val: boolean) => void
@@ -133,13 +136,26 @@ export const usePulseStore = create<PulseStore>((set) => ({
     return set({ activeProgram: program })
   },
 
-  // Metrics
-  metrics: null,
-  setMetrics: (metrics) => set({ metrics }),
+  // Metrics — keyed by programId
+  metricsByProgram: {},
+  getMetrics: (programId) => (state) => state.metricsByProgram[programId] || null,
+  setMetrics: (programId, metrics) =>
+    set((state) => ({
+      metricsByProgram: { ...state.metricsByProgram, [programId]: metrics },
+    })),
 
-  // Insights
-  insights: null,
-  setInsights: (insights) => set({ insights }),
+  // Insights — keyed by programId
+  insightsByProgram: {},
+  getInsights: (programId) => (state) => state.insightsByProgram[programId] || null,
+  setInsights: (programId, insights) =>
+    set((state) => ({
+      insightsByProgram: { ...state.insightsByProgram, [programId]: insights },
+    })),
+  clearInsights: (programId) =>
+    set((state) => {
+      const { [programId]: _, ...rest } = state.insightsByProgram
+      return { insightsByProgram: rest }
+    }),
 
   // Loading
   isSyncing: false,

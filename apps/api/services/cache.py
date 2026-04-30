@@ -1,7 +1,7 @@
 """
 Redis Cache Layer for Pulse.
 Uses Upstash Redis for caching metrics, transactions, and insights.
-Uses a singleton connection pool to avoid creating connections per request.
+Redis client is injected via FastAPI lifespan — no lazy singletons.
 """
 
 import redis.asyncio as redis
@@ -9,38 +9,39 @@ import json
 import os
 from typing import Optional, Any
 
-# Singleton Redis client — initialized once, reused across requests.
-# The URL already contains credentials, so no separate password needed.
+# Module-level redis client — injected via inject_redis()
 _redis_client: Optional[redis.Redis] = None
 
 
-def _get_redis_client() -> redis.Redis:
-    """Get or create the singleton Redis client."""
+def inject_redis(client: redis.Redis) -> None:
+    """Inject the Redis client from the FastAPI lifespan."""
     global _redis_client
+    _redis_client = client
+
+
+def _get_redis() -> redis.Redis:
+    """Get the injected Redis client."""
     if _redis_client is None:
-        _redis_client = redis.from_url(
-            os.getenv("UPSTASH_REDIS_URL", "redis://localhost:6379"),
-            decode_responses=False,
-        )
+        raise RuntimeError("Redis client not initialized. Call inject_redis() in the lifespan.")
     return _redis_client
 
 
 async def cache_get(key: str) -> Optional[Any]:
     """Get a value from cache, returns None if not found."""
-    r = _get_redis_client()
+    r = _get_redis()
     value = await r.get(key)
     return json.loads(value) if value else None
 
 
 async def cache_set(key: str, value: Any, ttl_seconds: int = 3600):
     """Set a value in cache with a TTL."""
-    r = _get_redis_client()
+    r = _get_redis()
     await r.setex(key, ttl_seconds, json.dumps(value, default=str))
 
 
 async def cache_invalidate(key: str):
     """Delete a key from cache."""
-    r = _get_redis_client()
+    r = _get_redis()
     await r.delete(key)
 
 

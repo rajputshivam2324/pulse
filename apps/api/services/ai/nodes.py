@@ -5,6 +5,8 @@ Each function represents one node in the graph.
 """
 
 import json
+import logging
+import os
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from .prompts import (
     ANOMALY_DETECTION_PROMPT,
@@ -15,12 +17,25 @@ from .prompts import (
 )
 from .state import InsightPipelineState
 
-# Initialize model — use exactly this configuration per spec
-model = ChatNVIDIA(
-    model="moonshotai/kimi-k2-instruct-0905",
-    api_key="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",
-    temperature=0.6,
-)
+logger = logging.getLogger(__name__)
+
+# Module-level model singleton — initialized lazily
+_model: ChatNVIDIA | None = None
+
+
+def _get_model() -> ChatNVIDIA:
+    """Lazily create and cache the ChatNVIDIA model singleton."""
+    global _model
+    if _model is None:
+        api_key = os.getenv("NVIDIA_API_KEY")
+        if not api_key:
+            raise RuntimeError("NVIDIA_API_KEY environment variable is not set")
+        _model = ChatNVIDIA(
+            model="moonshotai/kimi-k2-instruct-0905",
+            api_key=api_key,
+            temperature=0.6,
+        )
+    return _model
 
 
 def safe_parse_json(text: str) -> dict:
@@ -39,7 +54,7 @@ async def anomaly_detector_node(state: InsightPipelineState) -> dict:
     Node 1: Scan all metrics and identify anomalies.
     Output: list of anomaly dicts ranked by severity.
     """
-    chain = ANOMALY_DETECTION_PROMPT | model
+    chain = ANOMALY_DETECTION_PROMPT | _get_model()
     response = await chain.ainvoke(
         {"metrics_json": json.dumps(state["metrics_payload"], indent=2)}
     )
@@ -83,7 +98,7 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
     )
 
     insights = []
-    chain = INSIGHT_GENERATION_PROMPT | model
+    chain = INSIGHT_GENERATION_PROMPT | _get_model()
 
     for i, anomaly in enumerate(top_anomalies):
         try:
@@ -113,7 +128,7 @@ async def retention_analyst_node(state: InsightPipelineState) -> dict:
     Node 4: Deep-dive retention diagnosis — separate node for focused analysis.
     This produces the most specific insight in the output.
     """
-    chain = RETENTION_DIAGNOSIS_PROMPT | model
+    chain = RETENTION_DIAGNOSIS_PROMPT | _get_model()
     try:
         response = await chain.ainvoke(
             {
@@ -206,7 +221,7 @@ async def quick_win_extractor_node(state: InsightPipelineState) -> dict:
     """
     Node 6: Extract 3 quick wins from the generated insights.
     """
-    chain = QUICK_WINS_PROMPT | model
+    chain = QUICK_WINS_PROMPT | _get_model()
     try:
         response = await chain.ainvoke(
             {

@@ -52,10 +52,13 @@ export default function DashboardPage() {
   const programId = params.programId as string
 
   const {
-    metrics,
+    metricsByProgram,
+    getMetrics,
     setMetrics,
-    insights,
+    insightsByProgram,
+    getInsights,
     setInsights,
+    clearInsights,
     isSyncing,
     setSyncing,
     isGeneratingInsights,
@@ -64,55 +67,79 @@ export default function DashboardPage() {
     activeProgram,
   } = usePulseStore()
 
+  const metrics = programId ? metricsByProgram[programId] : null
+  const insights = programId ? insightsByProgram[programId] : null
+
   const [lastSynced, setLastSynced] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (!metrics && programId) {
+    if (!metrics && !isSyncing && programId) {
       fetchMetrics()
     }
   }, [programId])
 
+  useEffect(() => {
+    if (!isSyncing) {
+      setError(null)
+    }
+  }, [isSyncing])
+
   async function fetchMetrics() {
+    if (!user.token || !programId) return
     try {
-      const res = await fetch(`${API_BASE}/analytics/metrics/${programId}`)
+      const res = await fetch(`${API_BASE}/analytics/metrics/${programId}`, {
+        headers: { Authorization: `Bearer ${user.token}` },
+      })
       if (res.ok) {
         const data = await res.json()
-        setMetrics(data)
+        setMetrics(programId, data)
+      } else if (res.status === 404) {
+        setMetrics(programId, null)
       }
     } catch (err) {
       console.error('Failed to fetch metrics:', err)
+      setError('Failed to load metrics. Please try again.')
     }
   }
 
   async function handleSync() {
+    if (!user.token || !programId) return
     setSyncing(true)
+    setError(null)
     try {
       const res = await fetch(`${API_BASE}/analytics/sync/${programId}`, {
         method: 'POST',
+        headers: { Authorization: `Bearer ${user.token}` },
       })
       if (res.ok) {
         const data = await res.json()
-        setMetrics(data.metrics)
+        setMetrics(programId, data.metrics)
         setLastSynced(new Date().toLocaleTimeString())
-        setInsights(null)
+        clearInsights(programId)
+      } else {
+        const errData = await res.json()
+        setError(errData.detail || 'Sync failed')
       }
     } catch (err) {
       console.error('Sync failed:', err)
+      setError('Sync failed. Please try again.')
     } finally {
       setSyncing(false)
     }
   }
 
   async function handleGenerateInsights() {
+    if (!user.token || !programId) return
     setGeneratingInsights(true)
     try {
       const res = await fetch(
         `${API_BASE}/insights/generate/${programId}?program_name=${encodeURIComponent(activeProgram?.name || programId)}`,
-        { method: 'POST' }
+        { method: 'POST', headers: { Authorization: `Bearer ${user.token}` } }
       )
       if (res.ok) {
         const data = await res.json()
-        setInsights(data)
+        setInsights(programId, data)
       }
     } catch (err) {
       console.error('Insight generation failed:', err)
@@ -203,7 +230,43 @@ export default function DashboardPage() {
       </header>
 
       <main className="relative z-10 max-w-7xl mx-auto px-6 py-8 space-y-6 pt-24">
-        {/* Summary Metrics */}
+        {/* Error Alert */}
+        {error && (
+          <div className="bg-red-50 border border-red-200 rounded-lg p-4 flex items-center justify-between">
+            <span className="text-red-700 text-sm">{error}</span>
+            <button onClick={() => setError(null)} className="text-red-400 hover:text-red-600">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+              </svg>
+            </button>
+          </div>
+        )}
+
+        {/* Loading Skeleton - Show when no metrics and not syncing */}
+        {!metrics && !isSyncing && (
+          <div className="card p-8 text-center relative overflow-hidden" style={{ background: '#F5EFE6' }}>
+            <div className="absolute inset-0 opacity-30" style={{ background: 'radial-gradient(ellipse at center, rgba(212,130,90,0.15) 0%, transparent 70%)' }}></div>
+            <div className="relative z-10">
+              <div className="w-14 h-14 rounded-full mx-auto mb-4 flex items-center justify-center bg-[#F2DACE]">
+                <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} style={{ stroke: '#B5623E' }}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M3.75 13.5l10.5-11.25L12 10.5h8.25L9.75 21.75 12 13.5H3.75z" />
+                </svg>
+              </div>
+              <p className="text-base font-serif font-medium mb-2" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
+                No data yet
+              </p>
+              <p className="text-sm mb-4 text-[#7A6860]">
+                Sync your program to fetch transactions and generate metrics.
+              </p>
+              <button onClick={handleSync} className="btn-primary text-sm">
+                Sync Your Program
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Metrics - Show when available */}
+        {metrics && (
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="animate-scale-in">
             <MetricCard
@@ -309,6 +372,7 @@ export default function DashboardPage() {
             <InsightsPanel data={insights as any} isLoading={isGeneratingInsights} />
           )}
         </div>
+        )}
       </main>
     </div>
   )

@@ -1,7 +1,7 @@
 ---
 name: pulse-agent
 description: AI-Powered Product Analytics for Solana Founders
-model: claude-sonnet-4
+model: opencode/minimax-m2.5-free
 tools:
   read: true
   edit: true

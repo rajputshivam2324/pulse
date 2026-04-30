@@ -15,3 +15,7 @@ solders
 python-dotenv
 pytest
 pytest-asyncio
+slowapi
+structlog
+sentry-sdk
+base58
