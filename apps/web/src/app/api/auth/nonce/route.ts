@@ -6,6 +6,8 @@ import { createClient } from 'redis'
  * Nonce generation for SIWS authentication.
  * Returns a random nonce that gets signed by the wallet.
  * Uses Upstash Redis for nonce storage (production-safe, shared across instances).
+ *
+ * Fix #19: Reuse Redis connection and add error handler.
  */
 
 let redisClient: ReturnType<typeof createClient> | null = null
@@ -15,6 +17,7 @@ async function getRedis() {
     const url = process.env.UPSTASH_REDIS_URL
     if (url) {
       redisClient = createClient({ url })
+      redisClient.on('error', (err) => console.error('Redis client error:', err))
       await redisClient.connect()
     }
   }

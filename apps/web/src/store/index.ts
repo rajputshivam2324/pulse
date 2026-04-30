@@ -75,7 +75,7 @@ interface PulseStore {
   setGeneratingInsights: (val: boolean) => void
 }
 
-export const usePulseStore = create<PulseStore>((set) => ({
+export const usePulseStore = create<PulseStore>((set, get) => ({
   // Start with defaults (SSR-safe), hydrate on client mount
   _hydrated: false,
   _hydrate: () => {
@@ -115,7 +115,7 @@ export const usePulseStore = create<PulseStore>((set) => ({
       localStorage.removeItem('pulse_plan')
       localStorage.removeItem('pulse_active_program')
     }
-    return set({
+    set({
       user: { wallet: null, plan: 'free', token: null },
       activeProgram: null,
     })
@@ -138,7 +138,7 @@ export const usePulseStore = create<PulseStore>((set) => ({
 
   // Metrics — keyed by programId
   metricsByProgram: {},
-  getMetrics: (programId) => (state) => state.metricsByProgram[programId] || null,
+  getMetrics: (programId) => get().metricsByProgram[programId] || null,
   setMetrics: (programId, metrics) =>
     set((state) => ({
       metricsByProgram: { ...state.metricsByProgram, [programId]: metrics },
@@ -146,14 +146,15 @@ export const usePulseStore = create<PulseStore>((set) => ({
 
   // Insights — keyed by programId
   insightsByProgram: {},
-  getInsights: (programId) => (state) => state.insightsByProgram[programId] || null,
+  getInsights: (programId) => get().insightsByProgram[programId] || null,
   setInsights: (programId, insights) =>
     set((state) => ({
       insightsByProgram: { ...state.insightsByProgram, [programId]: insights },
     })),
   clearInsights: (programId) =>
     set((state) => {
-      const { [programId]: _, ...rest } = state.insightsByProgram
+      const rest = { ...state.insightsByProgram }
+      delete rest[programId]
       return { insightsByProgram: rest }
     }),
 

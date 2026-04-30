@@ -29,6 +29,10 @@ SOLANA_RPC_URL = (
     else "https://api.mainnet-beta.solana.com"
 )
 
+# API / RPC pagination sizes
+HELIUS_PAGE_SIZE = 100
+RPC_SIGNATURE_PAGE_SIZE = 100
+
 # Batch size for RPC fallback requests
 RPC_BATCH_SIZE = 20
 
@@ -79,21 +83,37 @@ async def get_all_transactions(
     This avoids re-fetching everything already processed.
     """
     all_txns = []
+    seen_signatures = set()
     before = None
 
     for _ in range(max_pages):
-        batch = await get_transactions_for_address(address, before=before, after=after)
+        batch = await get_transactions_for_address(
+            address,
+            before=before,
+            after=after,
+            limit=HELIUS_PAGE_SIZE,
+        )
         if not batch:
             break
-        all_txns.extend(batch)
-        before = batch[-1]["signature"]
-        if len(batch) < 100:
+
+        new_batch = []
+        for txn in batch:
+            signature = txn.get("signature")
+            if signature and signature not in seen_signatures:
+                seen_signatures.add(signature)
+                new_batch.append(txn)
+
+        if not new_batch:
             break
-        after = None  # only use 'after' on first page
+
+        all_txns.extend(new_batch)
+        before = batch[-1]["signature"]
+        if len(batch) < HELIUS_PAGE_SIZE:
+            break
 
     # Fallback: if Helius returns nothing and we're on devnet, use Solana RPC
     if not all_txns and SOLANA_NETWORK == "devnet":
-        all_txns = await _fallback_rpc_transactions(address, max_pages)
+        all_txns = await _fallback_rpc_transactions(address, max_pages, after=after)
 
     return all_txns
 
@@ -124,7 +144,11 @@ async def _fetch_single_rpc_tx(
         return None
 
 
-async def _fallback_rpc_transactions(address: str, max_pages: int = 10) -> list[dict]:
+async def _fallback_rpc_transactions(
+    address: str,
+    max_pages: int = 10,
+    after: Optional[str] = None,
+) -> list[dict]:
     """
     Fallback: fetch transactions via Solana RPC when Helius has no data.
     Uses getSignaturesForAddress + getTransaction to build enhanced-like objects.
@@ -132,18 +156,47 @@ async def _fallback_rpc_transactions(address: str, max_pages: int = 10) -> list[
     Batches getTransaction calls in groups of RPC_BATCH_SIZE for efficiency.
     """
     async with httpx.AsyncClient(timeout=60.0) as client:
-        # Step 1: Get signatures
-        sig_response = await client.post(
-            SOLANA_RPC_URL,
-            json={
-                "jsonrpc": "2.0",
-                "id": 1,
-                "method": "getSignaturesForAddress",
-                "params": [address, {"limit": min(max_pages * 100, 1000)}],
-            },
-        )
-        sig_data = sig_response.json()
-        signatures = [s for s in sig_data.get("result", []) if not s.get("err")]
+        # Step 1: Get signatures, paging with `before` and preserving the
+        # incremental cursor with `until` when `after` is supplied.
+        signatures = []
+        before = None
+        seen_signatures = set()
+
+        for _ in range(max_pages):
+            options = {"limit": RPC_SIGNATURE_PAGE_SIZE}
+            if before:
+                options["before"] = before
+            if after:
+                options["until"] = after
+
+            sig_response = await client.post(
+                SOLANA_RPC_URL,
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "getSignaturesForAddress",
+                    "params": [address, options],
+                },
+            )
+            sig_data = sig_response.json()
+            page = [s for s in sig_data.get("result", []) if not s.get("err")]
+            if not page:
+                break
+
+            new_page = []
+            for sig_info in page:
+                signature = sig_info.get("signature")
+                if signature and signature not in seen_signatures:
+                    seen_signatures.add(signature)
+                    new_page.append(sig_info)
+
+            if not new_page:
+                break
+
+            signatures.extend(new_page)
+            before = page[-1]["signature"]
+            if len(page) < RPC_SIGNATURE_PAGE_SIZE:
+                break
 
         if not signatures:
             return []

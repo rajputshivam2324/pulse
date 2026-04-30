@@ -64,12 +64,25 @@ interface DAWChartProps {
   }>
 }
 
-const CustomTooltip = ({ active, payload, label }: any) => {
+interface TooltipEntry {
+  dataKey: string
+  name?: string
+  value?: number
+  color?: string
+}
+
+interface CustomTooltipProps {
+  active?: boolean
+  payload?: TooltipEntry[]
+  label?: string
+}
+
+const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
   if (!active || !payload) return null
   return (
     <div className="glass rounded-lg px-3 py-2 text-xs" style={{ background: '#EDE3D4', border: '1px solid rgba(180,140,120,0.35)' }}>
       <p className="font-serif font-medium mb-1" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>{label}</p>
-      {payload.map((entry: any) => (
+      {payload.map((entry) => (
         <p key={entry.dataKey} style={{ color: entry.color }}>
           {entry.name}: {entry.value?.toLocaleString()}
         </p>

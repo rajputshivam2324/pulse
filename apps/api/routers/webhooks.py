@@ -24,8 +24,8 @@ def _verify_helius_signature(body: bytes, header_sig: str | None) -> bool:
     Helius sends the signature in the 'authorization' header as a hex digest.
     """
     if not HELIUS_WEBHOOK_SECRET:
-        logger.warning("HELIUS_WEBHOOK_SECRET not set — webhook signature verification disabled")
-        return True
+        logger.error("HELIUS_WEBHOOK_SECRET not set — rejecting all webhook requests")
+        return False
     if not header_sig:
         return False
     expected = hmac.new(
@@ -65,13 +65,22 @@ async def helius_webhook(request: Request):
 
     processed = 0
     for raw_txn in body_json:
-        # Extract program address from account data
-        account_data = raw_txn.get("accountData", [])
+        # Extract program address from instructions (more reliable than balance changes)
+        instructions = raw_txn.get("instructions", [])
         program_address = None
-        for account in account_data:
-            if account.get("nativeBalanceChange", 0) != 0:
-                program_address = account.get("account")
+        for instruction in instructions:
+            prog_id = instruction.get("programId")
+            if prog_id:
+                program_address = prog_id
                 break
+
+        # Fallback to accountData if no instructions found
+        if not program_address:
+            account_data = raw_txn.get("accountData", [])
+            for account in account_data:
+                if account.get("nativeBalanceChange", 0) != 0:
+                    program_address = account.get("account")
+                    break
 
         if not program_address:
             continue

@@ -3,6 +3,7 @@
 import Link from 'next/link'
 
 const PLANS = [
+const PLANS = [
   {
     name: 'Free',
     price: '$0',
@@ -18,12 +19,12 @@ const PLANS = [
     popular: false,
   },
   {
-    name: 'Pro',
-    price: '$49',
+    name: 'Team',
+    price: '$99',
     period: 'month',
     description: 'For growing programs',
     features: [
-      '3 programs tracked',
+      '5 programs tracked',
       'Full transaction history',
       'All metrics + funnels',
       'AI insights (basic)',
@@ -33,9 +34,9 @@ const PLANS = [
     popular: true,
   },
   {
-    name: 'Enterprise',
-    price: 'Custom',
-    period: '',
+    name: 'Protocol',
+    price: '$499',
+    period: 'month',
     description: 'For teams at scale',
     features: [
       'Unlimited programs',
@@ -48,6 +49,7 @@ const PLANS = [
     cta: 'Contact Us',
     popular: false,
   },
+]
 ]
 
 export default function PricingPage() {
@@ -77,7 +79,7 @@ export default function PricingPage() {
           </p>
         </div>
 
-        <div className="grid grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
           {PLANS.map((plan) => (
             <div
               key={plan.name}

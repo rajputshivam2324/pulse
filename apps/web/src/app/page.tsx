@@ -125,20 +125,20 @@ export default function LandingPage() {
         {/* Stats Strip */}
         <div className="stats-strip">
           <div className="stat-item">
-            <div className="stat-num">500+</div>
-            <div className="stat-label">Programs Tracked</div>
+            <div className="stat-num">Fast</div>
+            <div className="stat-label">Analytics Sync</div>
           </div>
           <div className="stat-item">
-            <div className="stat-num">2M+</div>
-            <div className="stat-label">Transactions Analyzed</div>
+            <div className="stat-num">Private</div>
+            <div className="stat-label">On-chain Source</div>
           </div>
           <div className="stat-item">
-            <div className="stat-num">12s</div>
-            <div className="stat-label">Avg. Sync Time</div>
+            <div className="stat-num">100%</div>
+            <div className="stat-label">Wallet Native</div>
           </div>
           <div className="stat-item">
-            <div className="stat-num">99.9%</div>
-            <div className="stat-label">Uptime</div>
+            <div className="stat-num">AI</div>
+            <div className="stat-label">Powered Insights</div>
           </div>
         </div>
 

@@ -6,9 +6,7 @@ All endpoints require JWT authentication.
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from slowapi import Limiter
-from slowapi.util import get_remote_address
-from slowapi.errors import RateLimitExceeded
+from services.rate_limit import limiter
 from services.auth import require_auth
 from services.ai.graph import insight_pipeline
 from services.ai.state import InsightPipelineState
@@ -18,8 +16,6 @@ from services.supabase import get_supabase
 
 router = APIRouter(prefix="/insights", tags=["insights"])
 logger = logging.getLogger(__name__)
-
-limiter = Limiter(key_func=get_remote_address)
 
 # Plan-gated features
 AI_INIGHTS_PLANS = {"team", "protocol"}
@@ -58,6 +54,27 @@ async def generate_insights(
     if not is_valid_solana_address(program_id):
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
 
+    # Ownership check
+    supabase = get_supabase()
+    program_row = (
+        supabase.table("programs")
+        .select("id, user_id")
+        .eq("program_address", program_id)
+        .execute()
+    )
+    if not program_row.data:
+        raise HTTPException(status_code=404, detail="Program not found.")
+
+    user_row = (
+        supabase.table("users")
+        .select("id")
+        .eq("wallet_pubkey", wallet)
+        .single()
+        .execute()
+    )
+    if not user_row.data or user_row.data["id"] != program_row.data[0].get("user_id"):
+        raise HTTPException(status_code=403, detail="You do not own this program.")
+
     # Server-side plan check
     has_access = await _check_plan_feature(wallet, "ai_insights")
     if not has_access:
@@ -94,7 +111,7 @@ async def generate_insights(
         logger.error("Insight pipeline failed", extra={"error": str(e), "program_id": program_id})
         raise HTTPException(
             status_code=500,
-            detail=f"Insight pipeline failed: {str(e)}",
+            detail="Insight pipeline failed due to an internal error. Please try again.",
         )
 
     output = {
@@ -120,6 +137,28 @@ async def get_insights(program_id: str, wallet: str = Depends(require_auth)):
     """Get cached insights for a program."""
     if not is_valid_solana_address(program_id):
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
+
+    # Ownership check
+    supabase = get_supabase()
+    program_row = (
+        supabase.table("programs")
+        .select("id, user_id")
+        .eq("program_address", program_id)
+        .execute()
+    )
+    if not program_row.data:
+        raise HTTPException(status_code=404, detail="Program not found.")
+
+    user_row = (
+        supabase.table("users")
+        .select("id")
+        .eq("wallet_pubkey", wallet)
+        .single()
+        .execute()
+    )
+    if not user_row.data or user_row.data["id"] != program_row.data[0].get("user_id"):
+        raise HTTPException(status_code=403, detail="You do not own this program.")
+
     insights = await cache_get(insights_cache_key(program_id))
     if not insights:
         raise HTTPException(

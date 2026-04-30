@@ -17,7 +17,8 @@ export default function OnboardingPage() {
   const [error, setError] = useState<string | null>(null)
 
   async function handleSync() {
-    if (!address.trim()) return
+    const programAddress = address.trim()
+    if (!programAddress) return
 
     setStatus('syncing')
     setSyncing(true)
@@ -25,9 +26,43 @@ export default function OnboardingPage() {
     setSyncInfo('Fetching transaction history from Helius...')
 
     try {
+      const token = localStorage.getItem('pulse_token')
+      const walletStr = localStorage.getItem('pulse_wallet')
+
+      if (!token || !walletStr) {
+        throw new Error('Please connect your wallet to continue.')
+      }
+
+      // Step 1: Register program first
+      const registerRes = await fetch('/api/programs', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
+        body: JSON.stringify({
+          wallet: localStorage.getItem('pulse_wallet'), // Ensure wallet is correct
+          programAddress,
+          name: programName || undefined,
+          network: 'mainnet'
+        }),
+      })
+
+      if (!registerRes.ok) {
+        const errData = await registerRes.json().catch(() => null)
+        throw new Error(errData?.error || `Failed to register program (${registerRes.status})`)
+      }
+
+      // Step 2: Sync program
       const res = await fetch(
-        `${API_BASE}/analytics/sync/${address.trim()}?program_name=${encodeURIComponent(programName || address.trim())}`,
-        { method: 'POST' }
+        `${API_BASE}/analytics/sync/${programAddress}?program_name=${encodeURIComponent(programName || programAddress)}`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          },
+        }
       )
 
       if (!res.ok) {
@@ -43,11 +78,12 @@ export default function OnboardingPage() {
         return
       }
 
-      setSyncInfo(`Synced ${data.transactions_parsed?.toLocaleString() || 'many'} transactions`)
-      setMetrics(data.metrics)
+      const transactionsParsed = data.transactionsParsed ?? data.transactions_parsed
+      setSyncInfo(`Synced ${transactionsParsed?.toLocaleString() || 'many'} transactions`)
+      setMetrics(programAddress, data.metrics)
       setActiveProgram({
-        id: address.trim(),
-        programAddress: address.trim(),
+        id: programAddress,
+        programAddress,
         name: programName || null,
         network: 'mainnet',
         lastSyncedAt: new Date().toISOString(),
@@ -55,7 +91,7 @@ export default function OnboardingPage() {
 
       setStatus('done')
       setTimeout(() => {
-        router.push(`/dashboard/${address.trim()}`)
+        router.push(`/dashboard/${programAddress}`)
       }, 1200)
     } catch (err) {
       setStatus('error')

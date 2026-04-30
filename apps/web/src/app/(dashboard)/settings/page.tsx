@@ -8,10 +8,22 @@
 import { usePulseStore } from '@/store'
 import { PLAN_LIMITS, type PlanType } from '@/lib/plans'
 import { useWallet } from '@solana/wallet-adapter-react'
+import { useState } from 'react'
+import { SubscriptionCheckout } from '@/components/dashboard/SubscriptionCheckout'
 
 export default function SettingsPage() {
-  const { user, programs } = usePulseStore()
+  const { user, programs, setUser } = usePulseStore()
   const { publicKey, disconnect } = useWallet()
+  const [checkoutPlan, setCheckoutPlan] = useState<'team' | 'protocol' | null>(null)
+
+  const handleCheckoutSuccess = (signature: string) => {
+    // In production, backend would verify the signature and update the plan.
+    // For demo, just update local state.
+    if (checkoutPlan) {
+      setUser({ plan: checkoutPlan })
+      setCheckoutPlan(null)
+    }
+  }
 
   const currentPlan = PLAN_LIMITS[user.plan as PlanType] || PLAN_LIMITS.free
 
@@ -159,7 +171,10 @@ export default function SettingsPage() {
                     </li>
                   </ul>
                   {!isActive && plan.price > 0 && (
-                    <button className="btn-primary w-full text-xs mt-auto">
+                    <button 
+                      onClick={() => setCheckoutPlan(plan.key as 'team' | 'protocol')}
+                      className="btn-primary w-full text-xs mt-auto"
+                    >
                       Pay with USDC
                     </button>
                   )}
@@ -167,6 +182,27 @@ export default function SettingsPage() {
               )
             })}
           </div>
+          
+          {checkoutPlan && (
+            <div className="mt-8">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-sm font-serif font-semibold" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
+                  Checkout
+                </h2>
+                <button 
+                  onClick={() => setCheckoutPlan(null)}
+                  className="text-xs text-red-500 hover:text-red-700 font-medium"
+                >
+                  Cancel
+                </button>
+              </div>
+              <SubscriptionCheckout 
+                plan={checkoutPlan} 
+                userId={user.wallet || 'unknown'} 
+                onSuccess={handleCheckoutSuccess} 
+              />
+            </div>
+          )}
         </section>
 
         {/* Help / Contact */}

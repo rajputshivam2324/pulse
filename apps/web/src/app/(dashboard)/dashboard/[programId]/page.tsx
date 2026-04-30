@@ -5,14 +5,27 @@
  * Premium Warm Design — Cream / Rose / Charcoal
  */
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState, type ComponentProps } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { usePulseStore } from '@/store'
 import { MetricCard, DAWChart, FunnelChart, RetentionGrid } from '@/components/dashboard/Charts'
-import { InsightsPanel } from '@/components/dashboard/InsightsPanel'
 import { canAccess } from '@/lib/plans'
 
 const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
+
+type MetricSummary = Record<string, number | string | undefined>
+type ChartDatum = Record<string, number | string | null | undefined>
+type DawDatum = { date: string; daw: number; new_wallets: number; returning_wallets: number }
+type FunnelDatum = { step: number; label: string; wallet_count: number; drop_off_rate: number }
+type RetentionDatum = { cohort_week: string; week_number: number; wallet_count: number; retention_rate: number }
+type DashboardMetrics = {
+  summary?: MetricSummary
+  dawTrend?: ChartDatum[]
+  daw_trend?: ChartDatum[]
+  funnel?: ChartDatum[]
+  retentionCohorts?: ChartDatum[]
+  retention_cohorts?: ChartDatum[]
+}
 
 function AnimatedNumber({ value, suffix = '' }: { value: string | number; suffix?: string }) {
   const [displayValue, setDisplayValue] = useState(0)
@@ -53,39 +66,19 @@ export default function DashboardPage() {
 
   const {
     metricsByProgram,
-    getMetrics,
     setMetrics,
-    insightsByProgram,
-    getInsights,
-    setInsights,
-    clearInsights,
     isSyncing,
     setSyncing,
-    isGeneratingInsights,
-    setGeneratingInsights,
     user,
     activeProgram,
   } = usePulseStore()
 
   const metrics = programId ? metricsByProgram[programId] : null
-  const insights = programId ? insightsByProgram[programId] : null
 
   const [lastSynced, setLastSynced] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (!metrics && !isSyncing && programId) {
-      fetchMetrics()
-    }
-  }, [programId])
-
-  useEffect(() => {
-    if (!isSyncing) {
-      setError(null)
-    }
-  }, [isSyncing])
-
-  async function fetchMetrics() {
+  const fetchMetrics = useCallback(async () => {
     if (!user.token || !programId) return
     try {
       const res = await fetch(`${API_BASE}/analytics/metrics/${programId}`, {
@@ -101,7 +94,16 @@ export default function DashboardPage() {
       console.error('Failed to fetch metrics:', err)
       setError('Failed to load metrics. Please try again.')
     }
-  }
+  }, [programId, setMetrics, user.token])
+
+  useEffect(() => {
+    if (!metrics && !isSyncing && programId) {
+      const timeout = window.setTimeout(() => {
+        void fetchMetrics()
+      }, 0)
+      return () => window.clearTimeout(timeout)
+    }
+  }, [fetchMetrics, isSyncing, metrics, programId])
 
   async function handleSync() {
     if (!user.token || !programId) return
@@ -116,7 +118,6 @@ export default function DashboardPage() {
         const data = await res.json()
         setMetrics(programId, data.metrics)
         setLastSynced(new Date().toLocaleTimeString())
-        clearInsights(programId)
       } else {
         const errData = await res.json()
         setError(errData.detail || 'Sync failed')
@@ -129,29 +130,36 @@ export default function DashboardPage() {
     }
   }
 
-  async function handleGenerateInsights() {
-    if (!user.token || !programId) return
-    setGeneratingInsights(true)
-    try {
-      const res = await fetch(
-        `${API_BASE}/insights/generate/${programId}?program_name=${encodeURIComponent(activeProgram?.name || programId)}`,
-        { method: 'POST', headers: { Authorization: `Bearer ${user.token}` } }
-      )
-      if (res.ok) {
-        const data = await res.json()
-        setInsights(programId, data)
-      }
-    } catch (err) {
-      console.error('Insight generation failed:', err)
-    } finally {
-      setGeneratingInsights(false)
-    }
-  }
 
-  const summary = ((metrics as any)?.summary as Record<string, any>) || {}
-  const dawTrend = ((metrics as any)?.dawTrend || (metrics as any)?.daw_trend || []) as any[]
-  const funnel = ((metrics as any)?.funnel || []) as any[]
-  const retentionCohorts = ((metrics as any)?.retentionCohorts || (metrics as any)?.retention_cohorts || []) as any[]
+  const dashboardMetrics = metrics as DashboardMetrics | null
+  const summary = dashboardMetrics?.summary || {}
+  const rawDawTrend = dashboardMetrics?.dawTrend || dashboardMetrics?.daw_trend || []
+  const rawFunnel = dashboardMetrics?.funnel || []
+  const rawRetentionCohorts = dashboardMetrics?.retentionCohorts || dashboardMetrics?.retention_cohorts || []
+  const dawTrend: DawDatum[] = rawDawTrend.map((item) => ({
+    date: String(item.date || ''),
+    daw: Number(item.daw || 0),
+    new_wallets: Number(item.newWallets ?? item.new_wallets ?? 0),
+    returning_wallets: Number(item.returningWallets ?? item.returning_wallets ?? 0),
+  }))
+  const funnel: FunnelDatum[] = rawFunnel.map((item) => ({
+    step: Number(item.step || 0),
+    label: String(item.label || ''),
+    wallet_count: Number(item.walletCount ?? item.wallet_count ?? 0),
+    drop_off_rate: Number(item.dropOffRate ?? item.drop_off_rate ?? 0),
+  }))
+  const retentionCohorts: RetentionDatum[] = rawRetentionCohorts.map((item) => ({
+    cohort_week: String(item.cohortWeek ?? item.cohort_week ?? ''),
+    week_number: Number(item.weekNumber ?? item.week_number ?? 0),
+    wallet_count: Number(item.walletCount ?? item.wallet_count ?? 0),
+    retention_rate: Number(item.retentionRate ?? item.retention_rate ?? 0),
+  }))
+
+  const totalWallets = Number(summary.totalWallets ?? summary.total_wallets ?? 0)
+  const totalTransactions = Number(summary.totalTransactions ?? summary.total_transactions ?? 0)
+  const avgDaw = summary.avgDailyActiveWallets ?? summary.avg_daily_active_wallets ?? '—'
+  const d7Retention = Number(summary.d7RetentionRate ?? summary.d7_retention_rate ?? 0)
+  const d30Retention = Number(summary.d30RetentionRate ?? summary.d30_retention_rate ?? 0)
 
   const truncatedAddress =
     programId.length > 12
@@ -267,35 +275,36 @@ export default function DashboardPage() {
 
         {/* Metrics - Show when available */}
         {metrics && (
+          <>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
           <div className="animate-scale-in">
             <MetricCard
               label="Total Wallets"
-              value={<AnimatedNumber value={summary.total_wallets || 0} />}
-              subtext={`${summary.total_transactions?.toLocaleString() || 0} transactions`}
+              value={<AnimatedNumber value={totalWallets} />}
+              subtext={`${totalTransactions.toLocaleString()} transactions`}
             />
           </div>
           <div className="animate-scale-in stagger-1">
             <MetricCard
               label="Avg DAW (30d)"
-              value={summary.avg_daily_active_wallets || '—'}
+              value={avgDaw}
               subtext="daily active wallets"
             />
           </div>
           <div className="animate-scale-in stagger-2">
             <MetricCard
               label="D7 Retention"
-              value={summary.d7_retention_rate ? `${summary.d7_retention_rate}%` : '—'}
-              subtext={summary.d7_retention_rate >= 25 ? 'Good for Solana' : 'Below benchmark'}
-              trend={summary.d7_retention_rate >= 25 ? 'up' : 'down'}
+              value={d7Retention ? `${d7Retention}%` : '—'}
+              subtext={d7Retention >= 25 ? 'Good for Solana' : 'Below benchmark'}
+              trend={d7Retention >= 25 ? 'up' : 'down'}
             />
           </div>
           <div className="animate-scale-in stagger-3">
             <MetricCard
               label="D30 Retention"
-              value={summary.d30_retention_rate ? `${summary.d30_retention_rate}%` : '—'}
-              subtext={summary.d30_retention_rate >= 10 ? 'Healthy' : 'Needs attention'}
-              trend={summary.d30_retention_rate >= 10 ? 'up' : 'down'}
+              value={d30Retention ? `${d30Retention}%` : '—'}
+              subtext={d30Retention >= 10 ? 'Healthy' : 'Needs attention'}
+              trend={d30Retention >= 10 ? 'up' : 'down'}
             />
           </div>
         </div>
@@ -315,63 +324,47 @@ export default function DashboardPage() {
           <RetentionGrid data={retentionCohorts} />
         </div>
 
-        {/* AI Insights */}
+        {/* AI Insights Call To Action */}
         <div className="animate-scale-in stagger-7">
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-[#F2DACE] rounded-lg flex items-center justify-center">
-                <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} style={{ stroke: '#B5623E' }}>
-                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.813 15.904L9 18.75l-.813-2.846a4.5 4.5 0 00-3.09-3.09L2.167 12a4.5 4.5 0 00-3.09 3.09L.167 18.75M9.813 15.904l.846 2.846a4.5 4.5 0 003.09 3.09L18.75 21M9.813 15.904l-8.626-8.626M18.75 4.5l-8.626 8.626" />
-                </svg>
-              </div>
-              <div>
-                <h2 className="text-lg font-serif font-bold" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
-                  AI Insights
-                </h2>
-                <p className="text-xs text-[#7A6860]">Powered by LangGraph</p>
-              </div>
-            </div>
-            {!canAccess(user.plan, 'ai_insights') && !insights ? (
-              <button
-                onClick={() => router.push('/settings')}
-                className="btn-ghost text-xs"
-              >
-                Upgrade to Team — $99/mo
-              </button>
-            ) : !insights && !isGeneratingInsights ? (
-              <button
-                onClick={handleGenerateInsights}
-                className="btn-primary text-xs"
-              >
-                Generate Insights
-              </button>
-            ) : null}
-          </div>
-
-          {!canAccess(user.plan, 'ai_insights') && !insights ? (
-            <div className="card p-8 text-center relative overflow-hidden" style={{ background: '#F5EFE6' }}>
-              <div className="absolute inset-0 opacity-30" style={{ background: 'radial-gradient(ellipse at center, rgba(212,130,90,0.15) 0%, transparent 70%)' }}></div>
-              <div className="relative z-10">
-                <div className="w-14 h-14 rounded-full mx-auto mb-4 flex items-center justify-center bg-[#F2DACE]">
-                  <svg className="w-7 h-7" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={1.5} style={{ stroke: '#B5623E' }}>
-                    <path strokeLinecap="round" strokeLinejoin="round" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                  </svg>
+          <div className="card relative overflow-hidden" style={{ background: '#2C2420', border: 'none' }}>
+            <div className="absolute inset-0 opacity-20" style={{ background: 'radial-gradient(circle at top right, #D4825A 0%, transparent 60%)' }} />
+            <div className="absolute top-0 right-0 w-64 h-64 bg-cyan-500/10 blur-3xl rounded-full" />
+            
+            <div className="relative z-10 p-8 md:p-12 flex flex-col md:flex-row items-center justify-between gap-8">
+              <div className="max-w-xl">
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="w-2 h-2 rounded-full bg-cyan-400 shadow-[0_0_8px_rgba(34,211,238,0.8)] animate-pulse" />
+                  <span className="text-xs font-mono text-cyan-400 uppercase tracking-widest">LangGraph Intelligence</span>
                 </div>
-                <p className="text-base font-serif font-medium mb-2" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
-                  AI Insights require a Team plan
+                <h2 className="text-3xl font-serif text-[#FAF7F2] mb-3">
+                  Uncover what's holding you back.
+                </h2>
+                <p className="text-[#A8978E] text-base leading-relaxed">
+                  Our multi-agent AI pipeline analyzes your transaction graph to identify critical retention bottlenecks, churn triggers, and provides actionable code-level recommendations.
                 </p>
-                <p className="text-sm mb-4 text-[#7A6860]">
-                  Upgrade to get LangGraph-powered insights on retention, churn, and what to fix.
-                </p>
-                <button className="btn-primary text-sm" onClick={() => router.push('/settings')}>
-                  Upgrade to Team — $99/mo in USDC
+              </div>
+              
+              <div className="shrink-0 flex flex-col items-center gap-3">
+                <button
+                  onClick={() => router.push(canAccess(user.plan, 'ai_insights') ? `/dashboard/${programId}/insights` : '/settings')}
+                  className="px-6 py-3 rounded-xl font-medium transition-all"
+                  style={{
+                    background: 'linear-gradient(135deg, #0f172a, #1e293b)',
+                    color: '#e2e8f0',
+                    border: '1px solid #334155',
+                    boxShadow: '0 4px 20px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.1)'
+                  }}
+                >
+                  {canAccess(user.plan, 'ai_insights') ? 'Launch AI Insights' : 'Upgrade to Access ($99/mo)'}
                 </button>
+                {!canAccess(user.plan, 'ai_insights') && (
+                  <span className="text-[10px] text-[#7A6860] uppercase tracking-widest">Requires Team Plan</span>
+                )}
               </div>
             </div>
-          ) : (
-            <InsightsPanel data={insights as any} isLoading={isGeneratingInsights} />
-          )}
+          </div>
         </div>
+          </>
         )}
       </main>
     </div>

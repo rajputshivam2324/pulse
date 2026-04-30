@@ -3,7 +3,7 @@
 import dynamic from 'next/dynamic'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { signInWithSolana } from '@/lib/auth'
 import { usePulseStore } from '@/store'
 
@@ -19,13 +19,7 @@ export default function ConnectPage() {
   const [isSigningIn, setIsSigningIn] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  useEffect(() => {
-    if (connected && publicKey && signMessage && !isSigningIn) {
-      handleSignIn()
-    }
-  }, [connected, publicKey])
-
-  async function handleSignIn() {
+  const handleSignIn = useCallback(async () => {
     if (!publicKey || !signMessage) return
     setIsSigningIn(true)
     setError(null)
@@ -47,7 +41,16 @@ export default function ConnectPage() {
     } finally {
       setIsSigningIn(false)
     }
-  }
+  }, [publicKey, router, setUser, signMessage])
+
+  useEffect(() => {
+    if (connected && publicKey && signMessage && !isSigningIn && !error) {
+      const timeout = window.setTimeout(() => {
+        void handleSignIn()
+      }, 0)
+      return () => window.clearTimeout(timeout)
+    }
+  }, [connected, handleSignIn, isSigningIn, publicKey, signMessage, error])
 
   return (
     <div

@@ -8,16 +8,6 @@ from typing import Optional
 from datetime import datetime
 
 
-def to_camel_snaker(s: str) -> str:
-    """Convert camelCase to snake_case for aliases."""
-    result = ""
-    for i, char in enumerate(s):
-        if char.isupper() and i > 0:
-            result += "_"
-        result += char.lower()
-    return result
-
-
 def to_camel_case(s: str) -> str:
     """Convert snake_case to camelCase."""
     components = s.split('_')

@@ -15,9 +15,10 @@ load_dotenv()
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from slowapi import Limiter, _rate_limit_exceeded_handler
-from slowapi.util import get_remote_address
+from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
+from services.rate_limit import limiter
+from slowapi.util import get_remote_address
 from routers import analytics, webhooks, insights
 from services.cache import inject_redis, close_redis
 
@@ -42,9 +43,7 @@ structlog.configure(
 log = structlog.get_logger()
 
 
-# ─── Rate Limiter ───────────────────────────────────────────────────────────
-limiter = Limiter(key_func=get_remote_address)
-
+# Shared Rate Limiter is imported from services.rate_limit
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -55,7 +54,7 @@ async def lifespan(app: FastAPI):
     import redis.asyncio as redis
     redis_client = redis.from_url(
         os.getenv("UPSTASH_REDIS_URL", "redis://localhost:6379"),
-        decode_responses=False,
+        decode_responses=True,
     )
     inject_redis(redis_client)
     log.info("redis_connected")
@@ -104,7 +103,7 @@ async def log_requests(request: Request, call_next):
     return response
 
 
-# CORS — allow Next.js frontend
+# CORS — allow Next.js frontend with restricted methods and headers
 app.add_middleware(
     CORSMiddleware,
     allow_origins=[
@@ -113,8 +112,8 @@ app.add_middleware(
         os.getenv("FRONTEND_URL", "http://localhost:3000"),
     ],
     allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "Accept"],
 )
 
 

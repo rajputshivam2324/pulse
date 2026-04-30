@@ -10,11 +10,16 @@ export async function signInWithSolana(
   signMessage: (msg: Uint8Array) => Promise<Uint8Array>
 ): Promise<string> {
   // Step 1: Get nonce
-  const { nonce } = await fetch('/api/auth/nonce', {
+  const res = await fetch('/api/auth/nonce', {
     method: 'POST',
     body: JSON.stringify({ wallet: publicKey }),
     headers: { 'Content-Type': 'application/json' },
-  }).then((r) => r.json())
+  })
+  if (!res.ok) {
+    const errorText = await res.text()
+    throw new Error(`Failed to fetch nonce: ${res.status} ${errorText}`)
+  }
+  const { nonce } = await res.json()
 
   // Step 2: Sign message — no transaction, no gas fee
   const message = new TextEncoder().encode(
@@ -23,7 +28,7 @@ export async function signInWithSolana(
   const signature = await signMessage(message)
 
   // Step 3: Verify and receive JWT
-  const { token } = await fetch('/api/auth/verify', {
+  const verifyRes = await fetch('/api/auth/verify', {
     method: 'POST',
     body: JSON.stringify({
       wallet: publicKey,
@@ -31,7 +36,12 @@ export async function signInWithSolana(
       nonce,
     }),
     headers: { 'Content-Type': 'application/json' },
-  }).then((r) => r.json())
+  })
+  if (!verifyRes.ok) {
+    const errorText = await verifyRes.text()
+    throw new Error(`Failed to verify signature: ${verifyRes.status} ${errorText}`)
+  }
+  const { token } = await verifyRes.json()
 
   localStorage.setItem('pulse_token', token)
   return token

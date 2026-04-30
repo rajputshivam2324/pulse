@@ -127,7 +127,7 @@ def compute_transaction_funnel(transactions: list[dict]) -> list[dict]:
     for step in range(1, 6):
         count = sum(1 for c in wallet_tx_counts.values() if c >= step)
         drop_off = (
-            round((1 - count / prev_count) * 100, 2) if prev_count else 0
+            round((1 - count / prev_count) * 100, 2) if prev_count and prev_count > 0 else 0
         )
         result.append(
             {

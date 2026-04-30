@@ -11,7 +11,9 @@ from typing import Optional
 
 security = HTTPBearer(auto_error=False)
 
-JWT_SECRET = os.getenv("JWT_SECRET", "pulse-jwt-secret-dev-only")
+JWT_SECRET = os.getenv("JWT_SECRET")
+if not JWT_SECRET:
+    raise RuntimeError("JWT_SECRET environment variable is required")
 JWT_ALGORITHM = "HS256"
 
 

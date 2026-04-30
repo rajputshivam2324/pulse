@@ -90,6 +90,7 @@ export class PulseTracker {
     this.queue = []
 
     try {
+      // TODO: Implement backend /events/batch endpoint to receive SDK events
       await fetch(`${this.endpoint}/events/batch`, {
         method: 'POST',
         headers: {

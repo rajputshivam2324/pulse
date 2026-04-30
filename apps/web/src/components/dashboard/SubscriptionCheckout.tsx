@@ -28,6 +28,7 @@ export function SubscriptionCheckout({ plan, userId, onSuccess }: CheckoutProps)
   const [status, setStatus] = useState<'pending' | 'processing' | 'confirmed' | 'error'>('pending')
   const [error, setError] = useState<string | null>(null)
   const price = PLAN_PRICES[plan]
+  void userId
 
   async function handlePayment() {
     if (!publicKey || !TREASURY) {

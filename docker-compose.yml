@@ -61,9 +61,3 @@ services:
 volumes:
   redis_data:
 
-# Default profile to run everything
-profiles:
-  default:
-    - api
-    - web
-    - redis

@@ -38,15 +38,19 @@ def _get_model() -> ChatNVIDIA:
     return _model
 
 
-def safe_parse_json(text: str) -> dict:
-    """Strip markdown fences and parse JSON safely."""
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        parts = cleaned.split("```")
-        cleaned = parts[1] if len(parts) > 1 else cleaned
-        if cleaned.startswith("json"):
-            cleaned = cleaned[4:]
-    return json.loads(cleaned.strip())
+def safe_parse_json(text: str, fallback: dict | None = None) -> dict:
+    """Strip markdown fences and parse JSON safely. Returns fallback on failure."""
+    try:
+        cleaned = text.strip()
+        if cleaned.startswith("```"):
+            parts = cleaned.split("```")
+            cleaned = parts[1] if len(parts) > 1 else cleaned
+            if cleaned.startswith("json"):
+                cleaned = cleaned[4:]
+        return json.loads(cleaned.strip())
+    except (json.JSONDecodeError, IndexError, ValueError) as e:
+        logger.warning("safe_parse_json failed", extra={"error": str(e), "text_preview": text[:200]})
+        return fallback if fallback is not None else {}
 
 
 async def anomaly_detector_node(state: InsightPipelineState) -> dict:
@@ -114,7 +118,7 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
             insights.append(insight)
         except Exception as e:
             # Log but don't fail the pipeline
-            print(f"Insight generation failed for anomaly {i}: {e}")
+            logger.warning("Insight generation failed for anomaly", extra={"index": i, "error": str(e)})
             continue
 
     trace = list(state.get("execution_trace", []))
@@ -148,7 +152,7 @@ async def retention_analyst_node(state: InsightPipelineState) -> dict:
         )
         result = safe_parse_json(response.content)
     except Exception as e:
-        print(f"Retention analysis failed: {e}")
+        logger.warning("Retention analysis failed", extra={"error": str(e)})
         result = {
             "d7_assessment": "Unable to assess",
             "d30_assessment": "Unable to assess",
@@ -234,7 +238,7 @@ async def quick_win_extractor_node(state: InsightPipelineState) -> dict:
         )
         result = safe_parse_json(response.content)
     except Exception as e:
-        print(f"Quick win extraction failed: {e}")
+        logger.warning("Quick win extraction failed", extra={"error": str(e)})
         result = {"quick_wins": ["Review your highest churn transaction type"]}
 
     trace = list(state.get("execution_trace", []))
@@ -253,7 +257,7 @@ async def output_assembler_node(state: InsightPipelineState) -> dict:
     top_insight = state["raw_insights"][0] if state["raw_insights"] else {}
 
     try:
-        chain = HEADLINE_PROMPT | model
+        chain = HEADLINE_PROMPT | _get_model()
         headline_response = await chain.ainvoke(
             {
                 "program_name": state.get("program_name") or "your program",
@@ -263,7 +267,7 @@ async def output_assembler_node(state: InsightPipelineState) -> dict:
         )
         headline = headline_response.content.strip()
     except Exception as e:
-        print(f"Headline generation failed: {e}")
+        logger.warning("Headline generation failed", extra={"error": str(e)})
         headline = f"Product Health Score: {state.get('health_score', 50)}/100"
 
     # Pick biggest problem from highest severity insight

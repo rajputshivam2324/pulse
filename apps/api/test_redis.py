@@ -1,11 +1,16 @@
 import asyncio
+import os
 import redis.asyncio as redis
+from dotenv import load_dotenv
+
+load_dotenv()
 
 async def main():
-    r = redis.from_url('rediss://default:gQAAAAAAAUrDAAIncDIwMzc0NDZlOTNmYTA0ZjU1YjJiYzE5ZDA0NDVlZTU5N3AyODQ2NzU@large-mule-84675.upstash.io:6379')
+    redis_url = os.getenv('UPSTASH_REDIS_URL', 'redis://localhost:6379')
+    r = redis.from_url(redis_url)
     try:
         await r.ping()
-        print('✅ Success! Connected to Upstash Redis.')
+        print('✅ Success! Connected to Redis.')
     except Exception as e:
         print('❌ Connection failed:', e)
     finally:
