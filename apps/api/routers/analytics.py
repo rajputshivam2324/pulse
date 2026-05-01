@@ -126,11 +126,22 @@ async def sync_program(
 
     try:
         supabase = get_supabase()
+        user_row = (
+            supabase.table("users")
+            .select("id")
+            .eq("wallet_pubkey", wallet)
+            .single()
+            .execute()
+        )
+        if not user_row.data:
+            raise HTTPException(status_code=401, detail="User not found.")
+
         # Verify wallet owns this program
         program_row = (
             supabase.table("programs")
             .select("id, name, last_synced_signature, user_id")
             .eq("program_address", address)
+            .eq("user_id", user_row.data["id"])
             .execute()
         )
         if not program_row.data:
@@ -139,20 +150,7 @@ async def sync_program(
                 detail="You do not own this program. Register it first.",
             )
 
-        # Ownership check: verify the requesting wallet owns this program
         program_data = program_row.data[0]
-        user_row = (
-            supabase.table("users")
-            .select("id")
-            .eq("wallet_pubkey", wallet)
-            .single()
-            .execute()
-        )
-        if not user_row.data or user_row.data["id"] != program_data.get("user_id"):
-            raise HTTPException(
-                status_code=403,
-                detail="You do not own this program.",
-            )
 
         program_id = program_data["id"]
         last_synced_signature = program_data.get("last_synced_signature")
@@ -290,15 +288,6 @@ async def get_metrics(program_id: str, wallet: str = Depends(require_auth)):
 
     # Ownership check
     supabase = get_supabase()
-    program_row = (
-        supabase.table("programs")
-        .select("id, user_id")
-        .eq("program_address", program_id)
-        .execute()
-    )
-    if not program_row.data:
-        raise HTTPException(status_code=404, detail="Program not found.")
-
     user_row = (
         supabase.table("users")
         .select("id")
@@ -306,7 +295,17 @@ async def get_metrics(program_id: str, wallet: str = Depends(require_auth)):
         .single()
         .execute()
     )
-    if not user_row.data or user_row.data["id"] != program_row.data[0].get("user_id"):
+    if not user_row.data:
+        raise HTTPException(status_code=401, detail="User not found.")
+
+    program_row = (
+        supabase.table("programs")
+        .select("id, user_id")
+        .eq("program_address", program_id)
+        .eq("user_id", user_row.data["id"])
+        .execute()
+    )
+    if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
     metrics = await cache_get(metrics_cache_key(program_id))
@@ -347,15 +346,6 @@ async def get_transactions(
 
     # Ownership check
     supabase = get_supabase()
-    program_row = (
-        supabase.table("programs")
-        .select("id, user_id")
-        .eq("program_address", program_id)
-        .execute()
-    )
-    if not program_row.data:
-        raise HTTPException(status_code=404, detail="Program not found.")
-
     user_row = (
         supabase.table("users")
         .select("id")
@@ -363,7 +353,17 @@ async def get_transactions(
         .single()
         .execute()
     )
-    if not user_row.data or user_row.data["id"] != program_row.data[0].get("user_id"):
+    if not user_row.data:
+        raise HTTPException(status_code=401, detail="User not found.")
+
+    program_row = (
+        supabase.table("programs")
+        .select("id, user_id")
+        .eq("program_address", program_id)
+        .eq("user_id", user_row.data["id"])
+        .execute()
+    )
+    if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
     txns = await cache_get(txn_cache_key(program_id))

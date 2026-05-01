@@ -56,15 +56,6 @@ async def generate_insights(
 
     # Ownership check
     supabase = get_supabase()
-    program_row = (
-        supabase.table("programs")
-        .select("id, user_id")
-        .eq("program_address", program_id)
-        .execute()
-    )
-    if not program_row.data:
-        raise HTTPException(status_code=404, detail="Program not found.")
-
     user_row = (
         supabase.table("users")
         .select("id")
@@ -72,7 +63,17 @@ async def generate_insights(
         .single()
         .execute()
     )
-    if not user_row.data or user_row.data["id"] != program_row.data[0].get("user_id"):
+    if not user_row.data:
+        raise HTTPException(status_code=401, detail="User not found.")
+
+    program_row = (
+        supabase.table("programs")
+        .select("id, user_id")
+        .eq("program_address", program_id)
+        .eq("user_id", user_row.data["id"])
+        .execute()
+    )
+    if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
     # Server-side plan check
@@ -140,15 +141,6 @@ async def get_insights(program_id: str, wallet: str = Depends(require_auth)):
 
     # Ownership check
     supabase = get_supabase()
-    program_row = (
-        supabase.table("programs")
-        .select("id, user_id")
-        .eq("program_address", program_id)
-        .execute()
-    )
-    if not program_row.data:
-        raise HTTPException(status_code=404, detail="Program not found.")
-
     user_row = (
         supabase.table("users")
         .select("id")
@@ -156,7 +148,17 @@ async def get_insights(program_id: str, wallet: str = Depends(require_auth)):
         .single()
         .execute()
     )
-    if not user_row.data or user_row.data["id"] != program_row.data[0].get("user_id"):
+    if not user_row.data:
+        raise HTTPException(status_code=401, detail="User not found.")
+
+    program_row = (
+        supabase.table("programs")
+        .select("id, user_id")
+        .eq("program_address", program_id)
+        .eq("user_id", user_row.data["id"])
+        .execute()
+    )
+    if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
     insights = await cache_get(insights_cache_key(program_id))

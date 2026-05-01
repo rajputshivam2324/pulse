@@ -23,14 +23,14 @@ export default function OnboardingPage() {
     setStatus('syncing')
     setSyncing(true)
     setError(null)
-    setSyncInfo('Fetching transaction history from Helius...')
+    setSyncInfo('Interfacing with Helius RPC node...')
 
     try {
       const token = localStorage.getItem('pulse_token')
       const walletStr = localStorage.getItem('pulse_wallet')
 
       if (!token || !walletStr) {
-        throw new Error('Please connect your wallet to continue.')
+        throw new Error('Wallet auth missing. Re-initialize.')
       }
 
       // Step 1: Register program first
@@ -50,7 +50,7 @@ export default function OnboardingPage() {
 
       if (!registerRes.ok) {
         const errData = await registerRes.json().catch(() => null)
-        throw new Error(errData?.error || `Failed to register program (${registerRes.status})`)
+        throw new Error(errData?.error || `Registration sequence failed (${registerRes.status})`)
       }
 
       // Step 2: Sync program
@@ -67,19 +67,19 @@ export default function OnboardingPage() {
 
       if (!res.ok) {
         const errData = await res.json().catch(() => null)
-        throw new Error(errData?.detail || `Sync failed (${res.status})`)
+        throw new Error(errData?.detail || `Sync sequence failed (${res.status})`)
       }
 
       const data = await res.json()
 
       if (data.status === 'no_data') {
         setStatus('error')
-        setError('No transactions found for this address. Check the program address and try again.')
+        setError('No transactions compiled. Verify program ID.')
         return
       }
 
       const transactionsParsed = data.transactionsParsed ?? data.transactions_parsed
-      setSyncInfo(`Synced ${transactionsParsed?.toLocaleString() || 'many'} transactions`)
+      setSyncInfo(`Indexed ${transactionsParsed?.toLocaleString() || 'many'} blocks`)
       setMetrics(programAddress, data.metrics)
       setActiveProgram({
         id: programAddress,
@@ -95,55 +95,57 @@ export default function OnboardingPage() {
       }, 1200)
     } catch (err) {
       setStatus('error')
-      setError(err instanceof Error ? err.message : 'Sync failed')
+      setError(err instanceof Error ? err.message : 'System Failure')
     } finally {
       setSyncing(false)
     }
   }
 
   return (
-    <div className="min-h-screen relative">
-      {/* Grid Background */}
-      <div className="grid-bg"></div>
-      <div className="orb orb-1"></div>
-      <div className="orb orb-2"></div>
-
+    <div className="min-h-screen relative overflow-hidden">
+      
       {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 glass px-12 py-5 flex items-center justify-between">
-        <Link href="/" className="logo flex items-center gap-2.5 no-underline">
-          <div className="logo-mark w-8 h-8 bg-[#2C2420] rounded-full flex items-center justify-center text-[#FAF7F2] text-sm font-medium">P</div>
-          <span style={{ fontFamily: 'Georgia, serif', letterSpacing: '-0.3px' }} className="font-serif text-xl font-bold text-[#2C2420]">Pulse</span>
+      <nav className="fixed top-0 left-0 right-0 z-50 machined-panel px-8 py-3 flex items-center justify-between">
+        <Link href="/" className="logo flex items-center gap-3 no-underline group">
+          <div className="w-8 h-8 rounded-sm bg-gradient-to-b from-[#444] to-[#111] flex items-center justify-center border border-[#000] shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]">
+            <span className="text-[#fff] text-xs font-mono font-bold">P-8</span>
+          </div>
+          <span className="f1-h text-xl font-bold uppercase tracking-widest text-black">Pulse</span>
         </Link>
         <div className="flex items-center gap-3">
-          <Link href="/" className="btn-ghost">Back</Link>
+          <Link href="/" className="btn-ghost"><span className="btn-label">Abort</span></Link>
         </div>
       </nav>
 
       {/* Onboarding Form */}
       <div className="relative z-10 flex items-center justify-center min-h-screen px-6 py-24">
         <div className="max-w-lg w-full animate-slide-up">
+          
           {/* Header */}
-          <div className="text-center mb-10">
-            <div className="w-16 h-16 bg-[#2C2420] rounded-full flex items-center justify-center mx-auto mb-6">
-              <span className="text-[#FAF7F2] font-serif font-bold text-2xl" style={{ fontFamily: 'Georgia, serif' }}>P</span>
+          <div className="page-header flex flex-col items-center text-center">
+            <div className="w-16 h-16 bg-[#111] rounded-full flex items-center justify-center mx-auto mb-6 border border-black/40 shadow-[inset_0_2px_4px_rgba(0,0,0,0.5),0_1px_0_rgba(255,255,255,0.3)]">
+              <span className="text-white f1-h font-black text-2xl">P</span>
             </div>
-            <h1 className="text-3xl font-serif font-bold mb-3" style={{ fontFamily: 'Georgia, serif', color: '#2C2420' }}>
-              Add your program
-            </h1>
-            <p className="text-sm" style={{ color: '#7A6860' }}>
-              Paste your Solana program address. We&apos;ll fetch your full transaction history and compute analytics.
-            </p>
+            <div className="page-title text-black/80 text-3xl font-bold mb-2">Initialize Target</div>
+            <div className="page-sub">Input Solana program ID. Initiating block history indexing...</div>
           </div>
 
           {/* Form Card */}
-          <div className="card p-6 space-y-5" style={{ background: '#F5EFE6' }}>
-            <div>
+          <div className="plate p-8 space-y-6">
+            
+            <div className="badge-row -mx-8 -mt-8 mb-8 px-8">
+              <div className="badge">
+                <div className="badge-num">01</div>
+                <div className="badge-label">Configuration</div>
+              </div>
+            </div>
+
+            <div className="relative z-10">
               <label
                 htmlFor="program-name"
-                className="block text-xs font-medium mb-2"
-                style={{ color: '#7A6860' }}
+                className="block text-[10px] f1-m font-bold uppercase tracking-widest mb-2 text-black/60"
               >
-                Program Name <span style={{ color: '#A8978E' }}>(optional)</span>
+                Alias <span className="text-black/40">(Optional)</span>
               </label>
               <input
                 id="program-name"
@@ -151,17 +153,16 @@ export default function OnboardingPage() {
                 value={programName}
                 onChange={(e) => setProgramName(e.target.value)}
                 placeholder="e.g. My DEX, NFT Marketplace"
-                className="input"
+                className="inp"
               />
             </div>
 
-            <div>
+            <div className="relative z-10 mt-6">
               <label
                 htmlFor="program-address"
-                className="block text-xs font-medium mb-2"
-                style={{ color: '#7A6860' }}
+                className="block text-[10px] f1-m font-bold uppercase tracking-widest mb-2 text-black/60"
               >
-                Program Address <span style={{ color: '#D4825A' }}>*</span>
+                Program ID <span className="text-red-600">*</span>
               </label>
               <input
                 id="program-address"
@@ -169,14 +170,16 @@ export default function OnboardingPage() {
                 value={address}
                 onChange={(e) => setAddress(e.target.value)}
                 placeholder="e.g. 675kPX9MHTjS2zt1qfr1NYHuzeLXfQM9H24wFSUt1Mp8"
-                className="input font-mono text-sm"
+                className="inp text-sm"
               />
             </div>
+
+            <div className="divider"></div>
 
             <button
               onClick={handleSync}
               disabled={!address.trim() || status === 'syncing'}
-              className="btn-hero w-full disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 py-3.5"
+              className="btn-hero w-full disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 relative z-10"
             >
               {status === 'syncing' ? (
                 <>
@@ -184,44 +187,44 @@ export default function OnboardingPage() {
                     <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
                     <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" className="opacity-75" />
                   </svg>
-                  Syncing...
+                  <span className="btn-label">Indexing...</span>
                 </>
               ) : status === 'done' ? (
                 <>
                   <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
                   </svg>
-                  Ready! Redirecting...
+                  <span className="btn-label">Compiled!</span>
                 </>
               ) : (
                 <>
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                   </svg>
-                  Sync & Analyze
+                  <span className="btn-label">Execute Scan</span>
                 </>
               )}
             </button>
 
             {/* Status Messages */}
-            <div className="text-center min-h-[24px]">
+            <div className="text-center min-h-[24px] relative z-10 mt-4">
               {status === 'syncing' && syncInfo && (
-                <p className="text-xs" style={{ color: '#B5623E' }}>
-                  {syncInfo}
+                <p className="text-[10px] f1-m uppercase tracking-widest text-black flex items-center justify-center gap-2">
+                  <span className="status-dot on"></span> {syncInfo}
                 </p>
               )}
               {status === 'error' && error && (
-                <p className="text-xs" style={{ color: '#B5623E' }}>
-                  {error}
+                <p className="text-[10px] f1-m uppercase tracking-widest text-red-600 font-bold flex items-center justify-center gap-2">
+                  <span className="status-dot error"></span> {error}
                 </p>
               )}
             </div>
           </div>
 
           {/* Help Text */}
-          <p className="text-xs text-center mt-6" style={{ color: '#A8978E' }}>
-            Helius free tier supports 1M credits/month — more than enough for development.
-          </p>
+          <div className="footer mt-6">
+            Helius network interface active. 1M credits/mo available.
+          </div>
         </div>
       </div>
     </div>

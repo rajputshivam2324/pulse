@@ -1,13 +1,20 @@
 import type { Metadata } from 'next'
-import { DM_Sans } from 'next/font/google'
+import { Rajdhani, JetBrains_Mono } from 'next/font/google'
 import './globals.css'
 import { SolanaWalletProvider } from '@/components/wallet/WalletProvider'
 import { StoreHydrator } from '@/components/StoreHydrator'
 
-const dmSans = DM_Sans({
+const rajdhani = Rajdhani({
   subsets: ['latin'],
-  weight: ['300', '400', '500', '700'],
-  variable: '--font-dm-sans',
+  weight: ['300', '400', '500', '600', '700'],
+  variable: '--font-rajdhani',
+  display: 'swap',
+})
+
+const jetbrainsMono = JetBrains_Mono({
+  subsets: ['latin'],
+  weight: ['300', '400', '500'],
+  variable: '--font-jetbrains-mono',
   display: 'swap',
 })
 
@@ -23,7 +30,7 @@ export default function RootLayout({
   children: React.ReactNode
 }) {
   return (
-    <html lang="en" className={dmSans.variable}>
+    <html lang="en" className={`${rajdhani.variable} ${jetbrainsMono.variable}`}>
       <body className="antialiased" suppressHydrationWarning>
         <SolanaWalletProvider>
           <StoreHydrator>{children}</StoreHydrator>
