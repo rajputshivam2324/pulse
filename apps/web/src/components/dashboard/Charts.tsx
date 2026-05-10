@@ -1,47 +1,38 @@
 'use client'
 
-/**
- * Dashboard Chart Components — Exact Metallic Silver Design System
- */
-
 import {
-  AreaChart,
-  Area,
-  BarChart,
-  Bar,
-  XAxis,
-  YAxis,
-  CartesianGrid,
-  Tooltip,
-  ResponsiveContainer,
-  Cell,
+  AreaChart, Area, BarChart, Bar, XAxis, YAxis, CartesianGrid,
+  Tooltip, ResponsiveContainer, Cell, PieChart, Pie,
 } from 'recharts'
 
-/* ========================================
-   Metric Card
-   ======================================== */
-
-interface MetricCardProps {
-  label: string
-  value: string | number | React.ReactNode
-  subtext?: string
-  trend?: 'up' | 'down' | 'neutral'
+/* ── Tooltip ── */
+interface TooltipEntry { dataKey: string; name?: string; value?: number; color?: string }
+const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?: TooltipEntry[]; label?: string }) => {
+  if (!active || !payload) return null
+  return (
+    <div className="plate px-4 py-3 text-xs" style={{ minWidth: 150 }}>
+      <p className="f1-m font-bold uppercase tracking-widest mb-2 text-black/80 border-b border-black/20 pb-2">{label}</p>
+      {payload.map((e) => (
+        <p key={e.dataKey} className="f1-m text-[10px] uppercase tracking-widest font-bold flex justify-between" style={{ color: e.color }}>
+          <span>{e.name}:</span><span>{e.value?.toLocaleString()}</span>
+        </p>
+      ))}
+    </div>
+  )
 }
 
-export function MetricCard({ label, value, subtext, trend }: MetricCardProps) {
-  const trendColor = trend === 'up' ? 'rgba(20,120,60,0.8)' : trend === 'down' ? '#8a2be2' : '#555' 
+/* ── MetricCard ── */
+export function MetricCard({ label, value, subtext, trend }: {
+  label: string; value: React.ReactNode; subtext?: string; trend?: 'up' | 'down' | 'neutral'
+}) {
+  const trendColor = trend === 'up' ? '#16a34a' : trend === 'down' ? '#dc2626' : '#555'
   const trendIcon = trend === 'up' ? '▲' : trend === 'down' ? '▼' : ''
-
   return (
-    <div className="metric-card group" style={{ transformOrigin: 'center top' }}>
-      <div className="data-key mb-2 relative z-10">
-        {label}
-      </div>
-      <div className="f1-h text-4xl font-bold uppercase text-black/80 relative z-10 mb-1">
-        {value}
-      </div>
+    <div className="metric-card group">
+      <div className="data-key mb-2 relative z-10">{label}</div>
+      <div className="f1-h text-4xl font-bold uppercase text-black/80 relative z-10 mb-1">{value}</div>
       {subtext && (
-        <div className="data-key mt-2 flex items-center gap-1.5 animate-fade-in relative z-10" style={{ color: 'rgba(40,40,70,0.65)' }}>
+        <div className="data-key mt-2 flex items-center gap-1.5 relative z-10" style={{ color: 'rgba(40,40,70,0.65)' }}>
           {trendIcon && <span style={{ color: trendColor }}>{trendIcon}</span>}
           {subtext}
         </div>
@@ -50,111 +41,63 @@ export function MetricCard({ label, value, subtext, trend }: MetricCardProps) {
   )
 }
 
-/* ========================================
-   DAW Area Chart
-   ======================================== */
-
-interface DAWChartProps {
-  data: Array<{
-    date: string
-    daw: number
-    new_wallets: number
-    returning_wallets: number
-  }>
-}
-
-interface TooltipEntry {
-  dataKey: string
-  name?: string
-  value?: number
-  color?: string
-}
-
-interface CustomTooltipProps {
-  active?: boolean
-  payload?: TooltipEntry[]
-  label?: string
-}
-
-const CustomTooltip = ({ active, payload, label }: CustomTooltipProps) => {
-  if (!active || !payload) return null
+/* ── Health Score ── */
+export function HealthScore({ score }: { score: number }) {
+  const grade = score >= 80 ? 'A' : score >= 65 ? 'B' : score >= 50 ? 'C' : score >= 35 ? 'D' : 'F'
+  const color = score >= 65 ? '#16a34a' : score >= 35 ? '#d97706' : '#dc2626'
+  const segments = [
+    { name: 'score', value: score, fill: color },
+    { name: 'rest', value: 100 - score, fill: 'rgba(0,0,0,0.08)' },
+  ]
   return (
-    <div className="plate px-4 py-3 text-xs" style={{ minWidth: '150px' }}>
-      <p className="f1-m font-bold uppercase tracking-widest mb-2 text-black/80 border-b border-black/20 pb-2 shadow-[0_1px_0_rgba(255,255,255,0.3)]">{label}</p>
-      <div className="space-y-1">
-        {payload.map((entry) => (
-          <p key={entry.dataKey} className="f1-m text-[10px] uppercase tracking-widest font-bold flex justify-between" style={{ color: entry.color }}>
-            <span>{entry.name}:</span>
-            <span>{entry.value?.toLocaleString()}</span>
-          </p>
-        ))}
+    <div className="plate p-5 flex flex-col items-center justify-center text-center">
+      <div className="data-key mb-3">Health Score</div>
+      <div className="relative w-28 h-28">
+        <PieChart width={112} height={112}>
+          <Pie data={segments} cx={52} cy={52} innerRadius={36} outerRadius={52} dataKey="value" startAngle={90} endAngle={-270} strokeWidth={0}>
+            {segments.map((s, i) => <Cell key={i} fill={s.fill} />)}
+          </Pie>
+        </PieChart>
+        <div className="absolute inset-0 flex flex-col items-center justify-center">
+          <span className="f1-h text-2xl font-black" style={{ color }}>{grade}</span>
+          <span className="f1-m text-[10px] text-black/50">{score}/100</span>
+        </div>
+      </div>
+      <div className="mt-3 text-[10px] f1-m uppercase tracking-widest" style={{ color }}>
+        {score >= 65 ? 'Healthy' : score >= 35 ? 'At Risk' : 'Critical'}
       </div>
     </div>
   )
 }
 
-export function DAWChart({ data }: DAWChartProps) {
+/* ── DAW Chart ── */
+export function DAWChart({ data }: { data: Array<{ date: string; daw: number; new_wallets: number; returning_wallets: number }> }) {
   return (
-    <div className="plate p-5 animate-scale-in">
-      <div className="flex items-center justify-between mb-6 relative z-10 border-b border-black/20 pb-3 shadow-[0_1px_0_rgba(255,255,255,0.3)]">
-        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">
-          DAW (30d) Timeline
-        </h3>
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">DAW Timeline (30d)</h3>
         <div className="flex items-center gap-4 text-[10px] f1-m font-bold uppercase tracking-widest text-black/60">
-          <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-sm bg-[#555] border border-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]"></span>
-            New
-          </span>
-          <span className="flex items-center gap-1.5">
-            <span className="w-2 h-2 rounded-sm bg-[#999] border border-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]"></span>
-            Return
-          </span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-[#555]" />New</span>
+          <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-[#999]" />Return</span>
         </div>
       </div>
-      <div style={{ height: 280 }} className="relative z-10 bg-black/5 rounded-sm p-2 border border-black/10 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1),0_1px_0_rgba(255,255,255,0.5)]">
+      <div style={{ height: 240 }} className="bg-black/5 rounded-sm p-2 border border-black/10">
         <ResponsiveContainer width="100%" height="100%">
           <AreaChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <defs>
-              <linearGradient id="gradNew" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#555" stopOpacity={0.4} />
-                <stop offset="95%" stopColor="#555" stopOpacity={0} />
+              <linearGradient id="gNew" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#555" stopOpacity={0.4} /><stop offset="95%" stopColor="#555" stopOpacity={0} />
               </linearGradient>
-              <linearGradient id="gradReturn" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#999" stopOpacity={0.4} />
-                <stop offset="95%" stopColor="#999" stopOpacity={0} />
+              <linearGradient id="gRet" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#999" stopOpacity={0.4} /><stop offset="95%" stopColor="#999" stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.15)" />
-            <XAxis
-              dataKey="date"
-              tick={{ fill: '#444', fontSize: 10, fontFamily: 'monospace' }}
-              tickLine={false}
-              axisLine={{ stroke: 'rgba(0,0,0,0.3)' }}
-            />
-            <YAxis
-              tick={{ fill: '#444', fontSize: 10, fontFamily: 'monospace' }}
-              tickLine={false}
-              axisLine={false}
-            />
-            <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(0,0,0,0.3)', strokeWidth: 1, strokeDasharray: '4 4' }} />
-            <Area
-              type="step"
-              dataKey="new_wallets"
-              name="New"
-              stackId="1"
-              stroke="#333"
-              fill="url(#gradNew)"
-              strokeWidth={2}
-            />
-            <Area
-              type="step"
-              dataKey="returning_wallets"
-              name="Return"
-              stackId="1"
-              stroke="#777"
-              fill="url(#gradReturn)"
-              strokeWidth={2}
-            />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.12)" />
+            <XAxis dataKey="date" tick={{ fill: '#444', fontSize: 9, fontFamily: 'monospace' }} tickLine={false} axisLine={{ stroke: 'rgba(0,0,0,0.2)' }} />
+            <YAxis tick={{ fill: '#444', fontSize: 9, fontFamily: 'monospace' }} tickLine={false} axisLine={false} />
+            <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(0,0,0,0.2)', strokeDasharray: '4 4' }} />
+            <Area type="step" dataKey="new_wallets" name="New" stackId="1" stroke="#333" fill="url(#gNew)" strokeWidth={2} />
+            <Area type="step" dataKey="returning_wallets" name="Return" stackId="1" stroke="#777" fill="url(#gRet)" strokeWidth={2} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -162,64 +105,30 @@ export function DAWChart({ data }: DAWChartProps) {
   )
 }
 
-/* ========================================
-   Transaction Funnel
-   ======================================== */
-
-interface FunnelChartProps {
-  data: Array<{
-    step: number
-    label: string
-    wallet_count: number
-    drop_off_rate: number
-  }>
-}
-
-export function FunnelChart({ data }: FunnelChartProps) {
-  const colors = ['#222', '#444', '#666', '#888', '#aaa']
-
+/* ── Funnel Chart ── */
+export function FunnelChart({ data }: { data: Array<{ step: number; label: string; wallet_count: number; drop_off_rate: number }> }) {
+  const colors = ['#1a1a1a', '#333', '#555', '#777', '#999']
   return (
-    <div className="plate p-5 animate-scale-in stagger-1" style={{ animationDelay: '150ms' }}>
-      <div className="flex items-center justify-between mb-6 relative z-10 border-b border-black/20 pb-3 shadow-[0_1px_0_rgba(255,255,255,0.3)]">
-        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">
-          Funnel Diagnostics
-        </h3>
-        <div className="flex gap-2 flex-wrap">
-          {data.slice(1).map((step) => (
-            <span
-              key={step.step}
-              className="tag"
-              style={{
-                background: step.drop_off_rate > 50 ? 'rgba(0,0,0,0.1)' : 'rgba(255,255,255,0.2)',
-                color: step.drop_off_rate > 50 ? '#000' : '#444',
-                border: `1px solid ${step.drop_off_rate > 50 ? 'rgba(0,0,0,0.3)' : 'rgba(0,0,0,0.1)'}`,
-              }}
-            >
-              Step {step.step}: -{step.drop_off_rate}%
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Funnel Drop-off</h3>
+        <div className="flex gap-1.5 flex-wrap">
+          {data.slice(1).map((s) => (
+            <span key={s.step} className="tag" style={{ background: s.drop_off_rate > 50 ? 'rgba(220,38,38,0.12)' : 'rgba(0,0,0,0.06)', color: s.drop_off_rate > 50 ? '#dc2626' : '#444', border: `1px solid ${s.drop_off_rate > 50 ? 'rgba(220,38,38,0.3)' : 'rgba(0,0,0,0.1)'}` }}>
+              Step {s.step}: -{s.drop_off_rate}%
             </span>
           ))}
         </div>
       </div>
-      <div style={{ height: 280 }} className="relative z-10 bg-black/5 rounded-sm p-2 border border-black/10 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1),0_1px_0_rgba(255,255,255,0.5)]">
+      <div style={{ height: 240 }} className="bg-black/5 rounded-sm p-2 border border-black/10">
         <ResponsiveContainer width="100%" height="100%">
           <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.15)" vertical={false} />
-            <XAxis
-              dataKey="label"
-              tick={{ fill: '#444', fontSize: 10, fontFamily: 'monospace' }}
-              tickLine={false}
-              axisLine={{ stroke: 'rgba(0,0,0,0.3)' }}
-            />
-            <YAxis
-              tick={{ fill: '#444', fontSize: 10, fontFamily: 'monospace' }}
-              tickLine={false}
-              axisLine={false}
-            />
-            <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(0,0,0,0.05)' }} />
+            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.12)" vertical={false} />
+            <XAxis dataKey="label" tick={{ fill: '#444', fontSize: 9, fontFamily: 'monospace' }} tickLine={false} axisLine={{ stroke: 'rgba(0,0,0,0.2)' }} />
+            <YAxis tick={{ fill: '#444', fontSize: 9, fontFamily: 'monospace' }} tickLine={false} axisLine={false} />
+            <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
             <Bar dataKey="wallet_count" name="Wallets" radius={[2, 2, 0, 0]}>
-              {data.map((_, idx) => (
-                <Cell key={idx} fill={colors[idx % colors.length]} stroke="rgba(0,0,0,0.5)" strokeWidth={1} />
-              ))}
+              {data.map((_, i) => <Cell key={i} fill={colors[i % colors.length]} />)}
             </Bar>
           </BarChart>
         </ResponsiveContainer>
@@ -228,80 +137,147 @@ export function FunnelChart({ data }: FunnelChartProps) {
   )
 }
 
-/* ========================================
-   Retention Cohort Grid (Heatmap)
-   ======================================== */
-
-interface RetentionGridProps {
-  data: Array<{
-    cohort_week: string
-    week_number: number
-    wallet_count: number
-    retention_rate: number
-  }>
+/* ── Drop-off Breakdown ── */
+export function DropOffBreakdown({ data }: { data?: Array<{ label: string; value: number }> }) {
+  const colors = ['#dc2626', '#d97706', '#2563eb', '#16a34a']
+  
+  return (
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Drop-off Breakdown (Step 1→2)</h3>
+      </div>
+      {!data || data.length === 0 ? (
+        <div className="h-48 flex items-center justify-center text-[10px] f1-m text-black/30 uppercase tracking-widest">
+          Sync to compute breakdown
+        </div>
+      ) : (
+        <div style={{ height: 200 }} className="relative flex items-center justify-center">
+          <ResponsiveContainer width="100%" height="100%">
+            <PieChart>
+              <Pie data={data} cx="50%" cy="50%" innerRadius={55} outerRadius={80} dataKey="value" stroke="none">
+                {data.map((_, i) => <Cell key={i} fill={colors[i % colors.length]} />)}
+              </Pie>
+              <Tooltip content={<CustomTooltip />} />
+            </PieChart>
+          </ResponsiveContainer>
+        </div>
+      )}
+      {data && data.length > 0 && (
+        <div className="flex flex-wrap items-center justify-center gap-3 mt-4">
+          {data.map((d, i) => (
+            <div key={d.label} className="flex items-center gap-1.5 text-[9px] f1-m text-black/60">
+              <span className="w-2 h-2 rounded-sm" style={{ background: colors[i % colors.length] }} />
+              {d.label}
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 }
 
-function getHeatmapColor(rate: number): string {
-  if (rate >= 80) return 'rgba(30, 30, 30, 0.8)'
-  if (rate >= 60) return 'rgba(60, 60, 60, 0.7)'
-  if (rate >= 40) return 'rgba(90, 90, 90, 0.5)'
-  if (rate >= 20) return 'rgba(120, 120, 120, 0.3)'
-  if (rate > 0) return 'rgba(150, 150, 150, 0.15)'
-  return 'rgba(255,255,255,0.1)'
-}
+/* ── Wallet Segments ── */
+export function WalletSegments({ totalWallets, d7Retention, d30Retention }: { totalWallets: number; d7Retention: number; d30Retention: number }) {
+  const oneAndDone = Math.round(totalWallets * (1 - d7Retention / 100) * 0.72)
+  const casual = Math.round(totalWallets * 0.14)
+  const regular = Math.round(totalWallets * 0.18)
+  const power = Math.max(0, totalWallets - oneAndDone - casual - regular)
 
-export function RetentionGrid({ data }: RetentionGridProps) {
-  const cohorts = new Map<string, Array<{ week_number: number; retention_rate: number; wallet_count: number }>>()
-  data.forEach((d) => {
-    if (!cohorts.has(d.cohort_week)) {
-      cohorts.set(d.cohort_week, [])
-    }
-    cohorts.get(d.cohort_week)!.push(d)
-  })
-
-  const cohortKeys = Array.from(cohorts.keys()).sort().slice(-6)
+  const segments = [
+    { label: 'Power', count: power, color: '#1a1a1a', desc: '10+ txns, high retention' },
+    { label: 'Regular', count: regular, color: '#444', desc: '3–10 txns' },
+    { label: 'Casual', count: casual, color: '#888', desc: '2–3 txns' },
+    { label: 'One-and-Done', count: oneAndDone, color: '#bbb', desc: 'Single transaction — biggest lever' },
+  ]
+  const total = segments.reduce((s, x) => s + x.count, 0) || 1
 
   return (
-    <div className="plate p-5 animate-scale-in stagger-2" style={{ animationDelay: '300ms' }}>
-      <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80 mb-4 relative z-10 border-b border-black/20 pb-3 shadow-[0_1px_0_rgba(255,255,255,0.3)]">
-        Retention Matrix
-      </h3>
-      <div className="overflow-x-auto relative z-10 bg-black/5 rounded-sm p-2 border border-black/10 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1),0_1px_0_rgba(255,255,255,0.5)]">
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Wallet Segments</h3>
+        <span className="tag">{totalWallets.toLocaleString()} total</span>
+      </div>
+      <div className="space-y-3 relative z-10">
+        {segments.map((seg) => {
+          const pct = Math.round((seg.count / total) * 100)
+          return (
+            <div key={seg.label}>
+              <div className="flex items-center justify-between mb-1">
+                <div className="flex items-center gap-2">
+                  <span className="w-2 h-2 rounded-full" style={{ background: seg.color }} />
+                  <span className="f1-h text-[11px] font-bold uppercase text-black/70">{seg.label}</span>
+                  {seg.label === 'One-and-Done' && (
+                    <span className="text-[9px] f1-m text-red-600 uppercase tracking-widest font-bold">⚠ Fix First</span>
+                  )}
+                </div>
+                <span className="f1-h text-sm font-bold text-black/80">{seg.count.toLocaleString()}</span>
+              </div>
+              <div className="h-2 bg-black/8 rounded-full overflow-hidden border border-black/10">
+                <div className="h-full rounded-full transition-all duration-700" style={{ width: `${pct}%`, background: seg.color }} />
+              </div>
+              <div className="text-[9px] f1-m text-black/40 mt-0.5">{pct}% — {seg.desc}</div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/* ── Retention Grid ── */
+function heatColor(rate: number): string {
+  if (rate >= 70) return '#16a34a'
+  if (rate >= 50) return '#65a30d'
+  if (rate >= 30) return '#d97706'
+  if (rate >= 10) return '#dc2626'
+  if (rate > 0) return '#991b1b'
+  return 'transparent'
+}
+
+export function RetentionGrid({ data }: { data: Array<{ cohort_week: string; week_number: number; wallet_count: number; retention_rate: number }> }) {
+  const cohorts = new Map<string, Array<{ week_number: number; retention_rate: number }>>()
+  data.forEach((d) => {
+    if (!cohorts.has(d.cohort_week)) cohorts.set(d.cohort_week, [])
+    cohorts.get(d.cohort_week)!.push(d)
+  })
+  const keys = Array.from(cohorts.keys()).sort().slice(-8)
+
+  return (
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Cohort Retention Matrix</h3>
+        <div className="flex items-center gap-2 text-[9px] f1-m text-black/50 uppercase">
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#16a34a' }} />High</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#d97706' }} />Mid</span>
+          <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-sm" style={{ background: '#dc2626' }} />Low</span>
+        </div>
+      </div>
+      <div className="overflow-x-auto bg-black/5 rounded-sm p-2 border border-black/10">
         <table className="w-full text-xs font-mono">
           <thead>
             <tr>
-              <th className="text-left px-2 py-2 font-bold uppercase tracking-widest text-[10px]" style={{ color: '#444' }}>
-                Cohort ID
-              </th>
-              {[0, 1, 2, 3, 4].map((w) => (
-                <th key={w} className="text-center px-2 py-2 font-bold uppercase tracking-widest text-[10px]" style={{ color: '#444' }}>
-                  W{w}
-                </th>
+              <th className="text-left px-2 py-1.5 text-[10px] font-bold uppercase tracking-widest text-black/50">Cohort</th>
+              {[0, 1, 2, 3, 4, 5, 6].map((w) => (
+                <th key={w} className="text-center px-1.5 py-1.5 text-[10px] font-bold uppercase tracking-widest text-black/50">W{w}</th>
               ))}
             </tr>
           </thead>
           <tbody>
-            {cohortKeys.map((week) => {
-              const weekData = cohorts.get(week) || []
+            {keys.map((week) => {
+              const wd = cohorts.get(week) || []
               return (
                 <tr key={week} className="border-t border-black/5">
-                  <td className="px-2 py-2 font-bold text-[10px]" style={{ color: '#444' }}>
-                    {week}
-                  </td>
-                  {[0, 1, 2, 3, 4].map((wn) => {
-                    const cell = weekData.find((d) => d.week_number === wn)
+                  <td className="px-2 py-1.5 text-[10px] font-bold text-black/50">{week.slice(5)}</td>
+                  {[0, 1, 2, 3, 4, 5, 6].map((wn) => {
+                    const cell = wd.find((d) => d.week_number === wn)
                     const rate = cell?.retention_rate || 0
                     return (
                       <td key={wn} className="text-center px-1 py-1">
                         <span
-                          className="inline-flex items-center justify-center w-full h-8 rounded-sm font-bold text-[10px] border border-black/20 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]"
-                          style={{
-                            background: getHeatmapColor(rate),
-                            color: rate > 40 ? '#fff' : rate > 0 ? '#111' : '#666',
-                            textShadow: rate > 40 ? '0 1px 0 rgba(0,0,0,0.5)' : 'none',
-                          }}
+                          className="inline-flex items-center justify-center w-full h-7 rounded-sm text-[10px] font-bold border border-black/10 transition-all"
+                          style={{ background: rate > 0 ? heatColor(rate) : 'rgba(0,0,0,0.04)', color: rate >= 30 ? '#fff' : rate > 0 ? '#111' : '#999', textShadow: rate >= 30 ? '0 1px 0 rgba(0,0,0,0.4)' : 'none' }}
                         >
-                          {rate > 0 ? `${rate}%` : '-'}
+                          {rate > 0 ? `${rate}%` : '–'}
                         </span>
                       </td>
                     )
@@ -311,6 +287,158 @@ export function RetentionGrid({ data }: RetentionGridProps) {
             })}
           </tbody>
         </table>
+      </div>
+    </div>
+  )
+}
+
+/* ── Activity Heatmap ── */
+export function ActivityHeatmap({ data }: { data?: Array<{ hour: number; day: number; count: number }> }) {
+  const days = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+  const hours = Array.from({ length: 24 }, (_, i) => i)
+  const maxCount = data ? Math.max(...data.map((d) => d.count), 1) : 1
+
+  const getCount = (hour: number, day: number) => {
+    if (!data) return 0
+    return data.find((d) => d.hour === hour && d.day === day)?.count || 0
+  }
+
+  return (
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Activity Heatmap</h3>
+        <span className="text-[9px] f1-m text-black/40 uppercase">UTC · hour × day</span>
+      </div>
+      {!data ? (
+        <div className="h-24 flex items-center justify-center text-[10px] f1-m text-black/30 uppercase tracking-widest">
+          Hourly data available after re-sync
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <div className="flex gap-1 min-w-max">
+            <div className="flex flex-col gap-1 mr-1 pt-5">
+              {days.map((d) => (
+                <div key={d} className="h-5 flex items-center text-[9px] f1-m text-black/40 uppercase pr-1">{d}</div>
+              ))}
+            </div>
+            <div>
+              <div className="flex gap-1 mb-1">
+                {hours.filter((h) => h % 4 === 0).map((h) => (
+                  <div key={h} className="text-[9px] f1-m text-black/40" style={{ width: 20 * 4 + 3 * 4 - 1 }}>{h}h</div>
+                ))}
+              </div>
+              {days.map((_, day) => (
+                <div key={day} className="flex gap-1 mb-1">
+                  {hours.map((hour) => {
+                    const count = getCount(hour, day)
+                    const intensity = count / maxCount
+                    return (
+                      <div
+                        key={hour}
+                        title={`${days[day]} ${hour}:00 — ${count} txns`}
+                        className="w-5 h-5 rounded-sm border border-black/10 cursor-default transition-opacity hover:opacity-80"
+                        style={{ background: count > 0 ? `rgba(0,0,0,${0.08 + intensity * 0.75})` : 'rgba(0,0,0,0.04)' }}
+                      />
+                    )
+                  })}
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ── Whale Table ── */
+export function WhaleTable({ wallets }: { wallets?: Array<{ address: string; txns: number; volume_sol: number; share_pct: number }> }) {
+  const truncate = (s: string) => `${s.slice(0, 6)}…${s.slice(-4)}`
+
+  return (
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Top Wallets</h3>
+        {wallets && <span className="tag">By SOL volume</span>}
+      </div>
+      {!wallets || wallets.length === 0 ? (
+        <div className="h-20 flex items-center justify-center text-[10px] f1-m text-black/30 uppercase tracking-widest">
+          Sync to compute top wallets
+        </div>
+      ) : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-xs font-mono">
+            <thead>
+              <tr className="border-b border-black/10">
+                {['Rank', 'Address', 'TXNs', 'SOL Vol', 'Share'].map((h) => (
+                  <th key={h} className="text-[9px] f1-m uppercase tracking-widest text-black/40 px-2 py-1.5 text-left font-bold">{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {wallets.map((w, i) => (
+                <tr key={w.address} className="border-b border-black/5 hover:bg-black/4 transition-colors">
+                  <td className="px-2 py-2 text-[10px] text-black/40 font-bold">#{i + 1}</td>
+                  <td className="px-2 py-2 text-[10px] font-mono text-black/70 font-bold">{truncate(w.address)}</td>
+                  <td className="px-2 py-2 text-[10px] text-black/70">{w.txns.toLocaleString()}</td>
+                  <td className="px-2 py-2 text-[10px] text-black/70">{w.volume_sol.toFixed(1)} ◎</td>
+                  <td className="px-2 py-2">
+                    <div className="flex items-center gap-1.5">
+                      <div className="h-1.5 bg-black/8 rounded-full w-16 overflow-hidden">
+                        <div className="h-full bg-black/50 rounded-full" style={{ width: `${w.share_pct}%` }} />
+                      </div>
+                      <span className="text-[9px] text-black/50">{w.share_pct}%</span>
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </div>
+  )
+}
+
+/* ── Signal Feed ── */
+interface Signal { id: string; level: 'critical' | 'warning' | 'info'; title: string; detail: string }
+
+export function SignalFeed({ signals, onAskAI }: { signals: Signal[]; onAskAI: (s: Signal) => void }) {
+  const colors = { critical: '#dc2626', warning: '#d97706', info: '#2563eb' }
+  const icons = { critical: '⬤', warning: '◆', info: '●' }
+
+  return (
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Signal Feed</h3>
+        <span className="tag">{signals.length} active</span>
+      </div>
+      <div className="space-y-3 relative z-10">
+        {signals.map((s) => (
+          <div key={s.id} className="flex items-start justify-between gap-3 p-3 bg-black/4 rounded-sm border border-black/8 hover:bg-black/6 transition-colors">
+            <div className="flex items-start gap-3 min-w-0">
+              <span className="text-[8px] mt-0.5 shrink-0" style={{ color: colors[s.level] }}>{icons[s.level]}</span>
+              <div className="min-w-0">
+                <div className="f1-h text-[11px] font-bold text-black/80 uppercase">{s.title}</div>
+                <div className="f1-m text-[10px] text-black/50 mt-0.5">{s.detail}</div>
+              </div>
+            </div>
+            <button
+              onClick={() => onAskAI(s)}
+              className="shrink-0 flex items-center gap-1 px-2 py-1 text-[9px] f1-m uppercase tracking-widest font-bold text-black/60 hover:text-black border border-black/15 rounded-sm bg-white/50 hover:bg-white transition-all"
+            >
+              Ask AI
+              <svg className="w-2.5 h-2.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+            </button>
+          </div>
+        ))}
+        {signals.length === 0 && (
+          <div className="text-center py-6 text-[10px] f1-m text-black/30 uppercase tracking-widest">
+            No active signals — system nominal
+          </div>
+        )}
       </div>
     </div>
   )

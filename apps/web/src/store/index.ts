@@ -48,8 +48,12 @@ interface PulseStore {
 
   // User
   user: UserState
+  linkedWallets: string[]
+  isLinkingWallet: boolean
   setUser: (user: Partial<UserState>) => void
   clearUser: () => void
+  setLinkedWallets: (wallets: string[]) => void
+  setIsLinkingWallet: (isLinking: boolean) => void
 
   // Programs
   programs: ProgramState[]
@@ -98,6 +102,10 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
 
   // User defaults
   user: { wallet: null, plan: 'free', token: null },
+  linkedWallets: [],
+  isLinkingWallet: false,
+  setLinkedWallets: (linkedWallets) => set({ linkedWallets }),
+  setIsLinkingWallet: (isLinkingWallet) => set({ isLinkingWallet }),
   setUser: (user) =>
     set((state) => {
       const updated = { ...state.user, ...user }
@@ -118,6 +126,9 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
     set({
       user: { wallet: null, plan: 'free', token: null },
       activeProgram: null,
+      programs: [],
+      metricsByProgram: {},
+      insightsByProgram: {},
     })
   },
 

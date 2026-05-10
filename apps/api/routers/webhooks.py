@@ -10,7 +10,8 @@ import hashlib
 import logging
 from fastapi import APIRouter, HTTPException, Request
 from services.parser import parse_transactions_batch
-from services.cache import cache_get, cache_set, txn_cache_key, cache_invalidate
+from services.cache import cache_invalidate
+from services.supabase import get_supabase
 
 router = APIRouter(prefix="/webhooks", tags=["webhooks"])
 logger = logging.getLogger(__name__)
@@ -54,8 +55,11 @@ async def helius_webhook(request: Request):
         logger.warning("Rejected webhook with invalid signature", extra={"ip": request.client.host if request.client else "unknown"})
         raise HTTPException(status_code=401, detail="Invalid webhook signature")
 
+    # Parse JSON from the already-consumed body bytes (request.json() would fail here
+    # because the body stream is already exhausted after request.body())
     try:
-        body_json = await request.json()
+        import json as _json
+        body_json = _json.loads(body)
     except Exception:
         raise HTTPException(status_code=400, detail="Invalid JSON body")
 
@@ -90,14 +94,36 @@ async def helius_webhook(request: Request):
         if not parsed:
             continue
 
-        # Deduplicate: merge with existing, keyed by signature
-        existing = await cache_get(txn_cache_key(program_address)) or []
-        existing_dict = {t["signature"]: t for t in existing}
-        for txn in parsed:
-            existing_dict[txn["signature"]] = txn  # overwrites if duplicate
-        merged = list(existing_dict.values())
+        # Resolve program_id from Supabase
+        supabase = get_supabase()
+        try:
+            prog_res = supabase.table("programs").select("id").eq("program_address", program_address).execute()
+            if not prog_res.data:
+                continue
+            
+            db_program_id = prog_res.data[0]["id"]
+            
+            rows_to_insert = [
+                {
+                    "program_id": db_program_id,
+                    "signature": t["signature"],
+                    "wallet_address": t["wallet_address"],
+                    "transaction_type": t.get("transaction_type", "UNKNOWN"),
+                    "timestamp": t.get("timestamp"),
+                    "amount_sol": t.get("amount_sol"),
+                    "token_mint": t.get("token_mint"),
+                }
+                for t in parsed
+            ]
+            if rows_to_insert:
+                supabase.table("transactions").upsert(
+                    rows_to_insert,
+                    on_conflict="signature",
+                ).execute()
+        except Exception as e:
+            logger.error(f"Failed to save webhook transactions: {e}")
+            continue
 
-        await cache_set(txn_cache_key(program_address), merged, ttl_seconds=3600)
         await cache_invalidate(f"metrics:{program_address}")
         processed += 1
 

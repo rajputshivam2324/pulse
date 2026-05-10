@@ -1,15 +1,23 @@
 'use client'
 
-import Link from 'next/link'
+/**
+ * Add New Program — replaces old /onboarding route.
+ *
+ * Accessible from /dashboard via "Add Program" button.
+ * Back button returns to /dashboard (program list), never to landing page.
+ * After successful sync, redirects to /dashboard/[programId].
+ */
+
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { usePulseStore } from '@/store'
 
 const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 
-export default function OnboardingPage() {
+export default function AddProgramPage() {
   const router = useRouter()
-  const { setSyncing, setMetrics, setActiveProgram } = usePulseStore()
+  const { user, setSyncing, setMetrics, setActiveProgram } = usePulseStore()
   const [address, setAddress] = useState('')
   const [programName, setProgramName] = useState('')
   const [status, setStatus] = useState<'idle' | 'syncing' | 'done' | 'error'>('idle')
@@ -26,22 +34,20 @@ export default function OnboardingPage() {
     setSyncInfo('Interfacing with Helius RPC node...')
 
     try {
-      const token = localStorage.getItem('pulse_token')
-      const walletStr = localStorage.getItem('pulse_wallet')
+      const token = user.token
 
-      if (!token || !walletStr) {
-        throw new Error('Wallet auth missing. Re-initialize.')
+      if (!token) {
+        throw new Error('Session expired. Please reconnect your wallet.')
       }
 
-      // Step 1: Register program first
+      // Step 1: Register program
       const registerRes = await fetch('/api/programs', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+          Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify({
-          wallet: localStorage.getItem('pulse_wallet'), // Ensure wallet is correct
           programAddress,
           name: programName || undefined,
           network: 'mainnet'
@@ -60,7 +66,7 @@ export default function OnboardingPage() {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
-            ...(token ? { Authorization: `Bearer ${token}` } : {}),
+            Authorization: `Bearer ${token}`,
           },
         }
       )
@@ -103,36 +109,40 @@ export default function OnboardingPage() {
 
   return (
     <div className="min-h-screen relative overflow-hidden">
-      
-      {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 machined-panel px-8 py-3 flex items-center justify-between">
-        <Link href="/" className="logo flex items-center gap-3 no-underline group">
-          <div className="w-8 h-8 rounded-sm bg-gradient-to-b from-[#444] to-[#111] flex items-center justify-center border border-[#000] shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]">
-            <span className="text-[#fff] text-xs font-mono font-bold">P-8</span>
-          </div>
-          <span className="f1-h text-xl font-bold uppercase tracking-widest text-black">Pulse</span>
-        </Link>
-        <div className="flex items-center gap-3">
-          <Link href="/" className="btn-ghost"><span className="btn-label">Abort</span></Link>
-        </div>
-      </nav>
 
-      {/* Onboarding Form */}
+      {/* Top Rail */}
+      <header className="fixed top-0 left-0 right-0 z-50 machined-panel px-8 py-3 flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <Link
+            href="/dashboard"
+            className="flex items-center gap-2 f1-m text-[10px] uppercase tracking-widest text-black/60 hover:text-black transition-colors no-underline"
+          >
+            <svg className="w-3 h-3" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
+            </svg>
+            Programs
+          </Link>
+          <div className="w-px h-6 bg-black/20 shadow-[1px_0_0_rgba(255,255,255,0.3)]" />
+          <h1 className="text-sm f1-h font-bold text-black/80 uppercase tracking-widest">Add Program</h1>
+        </div>
+      </header>
+
+      {/* Form */}
       <div className="relative z-10 flex items-center justify-center min-h-screen px-6 py-24">
         <div className="max-w-lg w-full animate-slide-up">
-          
+
           {/* Header */}
           <div className="page-header flex flex-col items-center text-center">
             <div className="w-16 h-16 bg-[#111] rounded-full flex items-center justify-center mx-auto mb-6 border border-black/40 shadow-[inset_0_2px_4px_rgba(0,0,0,0.5),0_1px_0_rgba(255,255,255,0.3)]">
               <span className="text-white f1-h font-black text-2xl">P</span>
             </div>
-            <div className="page-title text-black/80 text-3xl font-bold mb-2">Initialize Target</div>
-            <div className="page-sub">Input Solana program ID. Initiating block history indexing...</div>
+            <div className="page-title text-black/80 text-3xl font-bold mb-2">Register Program</div>
+            <div className="page-sub">Input Solana program ID to begin indexing transaction history</div>
           </div>
 
           {/* Form Card */}
           <div className="plate p-8 space-y-6">
-            
+
             <div className="badge-row -mx-8 -mt-8 mb-8 px-8">
               <div className="badge">
                 <div className="badge-num">01</div>
@@ -174,7 +184,7 @@ export default function OnboardingPage() {
               />
             </div>
 
-            <div className="divider"></div>
+            <div className="divider" />
 
             <button
               onClick={handleSync}
@@ -210,12 +220,12 @@ export default function OnboardingPage() {
             <div className="text-center min-h-[24px] relative z-10 mt-4">
               {status === 'syncing' && syncInfo && (
                 <p className="text-[10px] f1-m uppercase tracking-widest text-black flex items-center justify-center gap-2">
-                  <span className="status-dot on"></span> {syncInfo}
+                  <span className="status-dot on" /> {syncInfo}
                 </p>
               )}
               {status === 'error' && error && (
                 <p className="text-[10px] f1-m uppercase tracking-widest text-red-600 font-bold flex items-center justify-center gap-2">
-                  <span className="status-dot error"></span> {error}
+                  <span className="status-dot error" /> {error}
                 </p>
               )}
             </div>

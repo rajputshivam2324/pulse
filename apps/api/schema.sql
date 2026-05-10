@@ -13,6 +13,71 @@ create table users (
   created_at timestamptz default now()
 );
 
+-- Linked Wallets (Secondary wallets proving ownership)
+create table linked_wallets (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id) on delete cascade,
+  wallet_pubkey text not null unique,
+  label text,
+  created_at timestamptz default now()
+);
+
+-- Prevent linking a primary wallet as a secondary wallet
+create or replace function check_linked_wallet_not_primary()
+returns trigger as $$
+begin
+  if exists (select 1 from users where wallet_pubkey = new.wallet_pubkey) then
+    raise exception 'Wallet is already a primary account';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger tr_linked_wallets_not_primary
+  before insert or update on linked_wallets
+  for each row execute function check_linked_wallet_not_primary();
+
+-- Prevent creating a primary wallet if it's already a linked wallet
+create or replace function check_primary_wallet_not_linked()
+returns trigger as $$
+begin
+  if exists (select 1 from linked_wallets where wallet_pubkey = new.wallet_pubkey) then
+    raise exception 'Wallet is already a linked account';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger tr_users_not_linked
+  before insert or update on users
+  for each row execute function check_primary_wallet_not_linked();
+
+-- Max 5 linked wallets per user
+create or replace function check_linked_wallets_limit()
+returns trigger as $$
+begin
+  if (select count(*) from linked_wallets where user_id = new.user_id) >= 5 then
+    raise exception 'Maximum 5 linked wallets allowed per user';
+  end if;
+  return new;
+end;
+$$ language plpgsql;
+
+create trigger tr_linked_wallets_limit
+  before insert on linked_wallets
+  for each row execute function check_linked_wallets_limit();
+
+-- Audit Log for Wallet Linking
+create table wallet_audit_log (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references users(id) on delete cascade,
+  action text not null check (action in ('link', 'unlink')),
+  wallet_pubkey text not null,
+  ip_address text,
+  user_agent text,
+  created_at timestamptz default now()
+);
+
 -- Programs registered by users
 create table programs (
   id uuid primary key default gen_random_uuid(),
@@ -110,6 +175,8 @@ create index idx_payments_user on payments(user_id);
 -- =============================================================
 
 alter table users enable row level security;
+alter table linked_wallets enable row level security;
+alter table wallet_audit_log enable row level security;
 alter table programs enable row level security;
 alter table transactions enable row level security;
 alter table metrics_daily enable row level security;
@@ -122,6 +189,16 @@ create policy "Users can read own data" on users
   for select using (auth.uid() = id);
 create policy "Users can update own data" on users
   for update using (auth.uid() = id);
+
+-- Linked Wallets: users can read/delete their own
+create policy "Users can read own linked wallets" on linked_wallets
+  for select using (user_id = auth.uid());
+create policy "Users can delete own linked wallets" on linked_wallets
+  for delete using (user_id = auth.uid());
+
+-- Audit log: users can read their own
+create policy "Users can read own wallet audit logs" on wallet_audit_log
+  for select using (user_id = auth.uid());
 
 -- Programs: users can CRUD their own programs
 create policy "Users can read own programs" on programs

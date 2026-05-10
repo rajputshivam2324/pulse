@@ -9,14 +9,13 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from slowapi import Limiter
 from services.rate_limit import limiter
-from services.auth import require_auth
+from services.auth import require_auth, resolve_wallet_to_user_id
 from services.helius import get_all_transactions
 from services.parser import parse_transactions_batch
 from services.metrics import build_metrics_payload
 from services.cache import (
     cache_get,
     cache_set,
-    txn_cache_key,
     metrics_cache_key,
 )
 from services.validators import is_valid_solana_address
@@ -106,6 +105,7 @@ async def sync_program(
     address: str,
     wallet: str = Depends(require_auth),
     program_name: str = Query(None),
+    force: bool = Query(False, description="When true, ignore the incremental cursor and re-fetch all transactions from Helius."),
 ):
     """
     Full sync pipeline for a Solana program address:
@@ -126,14 +126,8 @@ async def sync_program(
 
     try:
         supabase = get_supabase()
-        user_row = (
-            supabase.table("users")
-            .select("id")
-            .eq("wallet_pubkey", wallet)
-            .single()
-            .execute()
-        )
-        if not user_row.data:
+        user_id = resolve_wallet_to_user_id(wallet)
+        if not user_id:
             raise HTTPException(status_code=401, detail="User not found.")
 
         # Verify wallet owns this program
@@ -141,7 +135,7 @@ async def sync_program(
             supabase.table("programs")
             .select("id, name, last_synced_signature, user_id")
             .eq("program_address", address)
-            .eq("user_id", user_row.data["id"])
+            .eq("user_id", user_id)
             .execute()
         )
         if not program_row.data:
@@ -155,10 +149,17 @@ async def sync_program(
         program_id = program_data["id"]
         last_synced_signature = program_data.get("last_synced_signature")
 
+        # `force=true` resets the cursor so the full history is re-fetched from Helius.
+        # Without this, a stale or incorrect cursor would cause the sync to return
+        # zero new transactions even when Helius has data.
+        cursor = None if force else last_synced_signature
+        if force:
+            logger.info("Force resync requested — ignoring incremental cursor", extra={"address": address})
+
         # Step 1: Fetch transactions from Helius (incremental if cursor exists)
         raw_txns = await get_all_transactions(
             address,
-            after=last_synced_signature,
+            after=cursor,
             max_pages=50,  # Allow more pages for incremental
         )
         if not raw_txns:
@@ -176,7 +177,7 @@ async def sync_program(
 
             deduped = _sort_transactions_newest_first(existing_txns)
             metrics = build_metrics_payload(deduped)
-            await cache_set(txn_cache_key(address), deduped, ttl_seconds=3600)
+            # Only cache metrics (small) — raw txns exceed Redis 10MB limit
             await cache_set(metrics_cache_key(address), metrics, ttl_seconds=3600)
 
             return {
@@ -195,22 +196,18 @@ async def sync_program(
                 detail="Transactions fetched but none could be parsed",
             )
 
-        # Step 3: Deduplicate on signature before writing.
-        # Prefer Redis for speed, but fall back to paginated Supabase reads so
-        # incremental sync does not compute metrics from only the newest page
-        # when the cache has expired.
-        existing_txns = await cache_get(txn_cache_key(address))
-        if existing_txns is None:
-            existing_txns = _fetch_existing_transactions_from_supabase(
-                supabase,
-                program_id,
-                address,
-            )
+        # Step 3: Deduplicate — always read from Supabase (paginated).
+        # We never cache raw transactions in Redis: large programs exceed the
+        # Upstash 10 MB request limit. Supabase is the source of truth.
+        existing_txns = _fetch_existing_transactions_from_supabase(
+            supabase,
+            program_id,
+            address,
+        )
+        if not isinstance(existing_txns, list):
+            existing_txns = []
         merged = {t["signature"]: t for t in existing_txns + parsed}
         deduped = _sort_transactions_newest_first(list(merged.values()))
-
-        # Step 4: Cache raw transactions (Redis as read-through cache)
-        await cache_set(txn_cache_key(address), deduped, ttl_seconds=3600)
 
         # Step 5: Persist to Supabase (source of truth) — upsert by signature
         try:
@@ -241,14 +238,19 @@ async def sync_program(
         # Step 7: Cache metrics
         await cache_set(metrics_cache_key(address), metrics, ttl_seconds=3600)
 
-        # Step 8: Update last_synced_at and last_synced_signature
+        # Step 8: Update last_synced_at, last_synced_signature, and name (if provided)
         try:
             # Helius/RPC responses are newest-first; the sync cursor must point
             # at the newest fetched transaction, not the oldest page boundary.
             latest_signature = raw_txns[0]["signature"] if raw_txns else None
-            supabase.table("programs").update(
-                {"last_synced_at": "now()", "last_synced_signature": latest_signature}
-            ).eq("id", program_id).execute()
+            update_payload: dict = {
+                "last_synced_at": "now()",
+                "last_synced_signature": latest_signature,
+            }
+            # Persist program name when the caller provides one
+            if program_name:
+                update_payload["name"] = program_name
+            supabase.table("programs").update(update_payload).eq("id", program_id).execute()
         except Exception:
             pass  # Non-fatal
 
@@ -269,10 +271,11 @@ async def sync_program(
     except HTTPException:
         raise
     except Exception as e:
-        logger.error("Sync failed", extra={"error": str(e), "address": address})
+        import traceback
+        logger.error("Sync failed: %s\n%s", str(e), traceback.format_exc(), extra={"address": address})
         raise HTTPException(
             status_code=500,
-            detail="Sync failed due to an internal error. Please try again.",
+            detail=f"Sync failed: {str(e)}",
         )
 
 
@@ -288,21 +291,15 @@ async def get_metrics(program_id: str, wallet: str = Depends(require_auth)):
 
     # Ownership check
     supabase = get_supabase()
-    user_row = (
-        supabase.table("users")
-        .select("id")
-        .eq("wallet_pubkey", wallet)
-        .single()
-        .execute()
-    )
-    if not user_row.data:
+    user_id = resolve_wallet_to_user_id(wallet)
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
     program_row = (
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
-        .eq("user_id", user_row.data["id"])
+        .eq("user_id", user_id)
         .execute()
     )
     if not program_row.data:
@@ -319,7 +316,7 @@ async def get_metrics(program_id: str, wallet: str = Depends(require_auth)):
         if txns:
             txns = _sort_transactions_newest_first(txns)
             metrics = build_metrics_payload(txns)
-            await cache_set(txn_cache_key(program_id), txns, ttl_seconds=3600)
+            # Only cache metrics — raw txns exceed Redis 10MB limit
             await cache_set(metrics_cache_key(program_id), metrics, ttl_seconds=3600)
 
     if not metrics:
@@ -346,36 +343,27 @@ async def get_transactions(
 
     # Ownership check
     supabase = get_supabase()
-    user_row = (
-        supabase.table("users")
-        .select("id")
-        .eq("wallet_pubkey", wallet)
-        .single()
-        .execute()
-    )
-    if not user_row.data:
+    user_id = resolve_wallet_to_user_id(wallet)
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
     program_row = (
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
-        .eq("user_id", user_row.data["id"])
+        .eq("user_id", user_id)
         .execute()
     )
     if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
-    txns = await cache_get(txn_cache_key(program_id))
-    if not txns:
-        db_program_id = program_row.data[0]["id"]
-        txns = _fetch_existing_transactions_from_supabase(
-            supabase,
-            db_program_id,
-            program_id,
-        )
-        if txns:
-            await cache_set(txn_cache_key(program_id), txns, ttl_seconds=3600)
+    # Always read from Supabase — no raw-txn Redis cache (exceeds 10 MB limit)
+    db_program_id = program_row.data[0]["id"]
+    txns = _fetch_existing_transactions_from_supabase(
+        supabase,
+        db_program_id,
+        program_id,
+    )
 
     if not txns:
         raise HTTPException(

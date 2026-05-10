@@ -19,7 +19,7 @@ from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from services.rate_limit import limiter
 from slowapi.util import get_remote_address
-from routers import analytics, webhooks, insights
+from routers import analytics, webhooks, insights, user
 from services.cache import inject_redis, close_redis
 
 # ─── Structured Logging ────────────────────────────────────────────────────
@@ -121,6 +121,7 @@ app.add_middleware(
 app.include_router(analytics.router)
 app.include_router(webhooks.router)
 app.include_router(insights.router)
+app.include_router(user.router)
 
 
 @app.get("/")

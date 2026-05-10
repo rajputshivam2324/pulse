@@ -53,10 +53,6 @@ async def close_redis():
         _redis_client = None
 
 
-def txn_cache_key(program_address: str) -> str:
-    """Cache key for raw transactions."""
-    return f"txns:{program_address}"
-
 
 def metrics_cache_key(program_id: str) -> str:
     """Cache key for computed metrics."""

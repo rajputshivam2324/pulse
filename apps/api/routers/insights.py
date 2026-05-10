@@ -7,7 +7,7 @@ All endpoints require JWT authentication.
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from services.rate_limit import limiter
-from services.auth import require_auth
+from services.auth import require_auth, resolve_wallet_to_user_id
 from services.ai.graph import insight_pipeline
 from services.ai.state import InsightPipelineState
 from services.cache import cache_get, cache_set, metrics_cache_key, insights_cache_key
@@ -22,10 +22,14 @@ AI_INIGHTS_PLANS = {"team", "protocol"}
 
 
 async def _check_plan_feature(wallet: str, feature: str) -> bool:
-    """Look up the user's plan from Supabase and check feature access."""
+    """Look up the user's plan from Supabase and check feature access.
+    Resolves linked wallets to their primary user before checking plan."""
     try:
         supabase = get_supabase()
-        result = supabase.table("users").select("plan").eq("wallet_pubkey", wallet).execute()
+        user_id = resolve_wallet_to_user_id(wallet)
+        if not user_id:
+            return False
+        result = supabase.table("users").select("plan").eq("id", user_id).execute()
         if not result.data:
             return False
         plan = result.data[0].get("plan", "free")
@@ -54,23 +58,17 @@ async def generate_insights(
     if not is_valid_solana_address(program_id):
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
 
-    # Ownership check
+    # Ownership check — resolve linked wallets to primary user
     supabase = get_supabase()
-    user_row = (
-        supabase.table("users")
-        .select("id")
-        .eq("wallet_pubkey", wallet)
-        .single()
-        .execute()
-    )
-    if not user_row.data:
+    user_id = resolve_wallet_to_user_id(wallet)
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
     program_row = (
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
-        .eq("user_id", user_row.data["id"])
+        .eq("user_id", user_id)
         .execute()
     )
     if not program_row.data:
@@ -109,10 +107,16 @@ async def generate_insights(
     try:
         result = await insight_pipeline.ainvoke(initial_state)
     except Exception as e:
-        logger.error("Insight pipeline failed", extra={"error": str(e), "program_id": program_id})
+        import traceback
+        logger.error(
+            "Insight pipeline failed: %s\n%s",
+            str(e),
+            traceback.format_exc(),
+            extra={"program_id": program_id},
+        )
         raise HTTPException(
             status_code=500,
-            detail="Insight pipeline failed due to an internal error. Please try again.",
+            detail=f"Insight pipeline failed: {str(e)}",
         )
 
     output = {
@@ -139,27 +143,29 @@ async def get_insights(program_id: str, wallet: str = Depends(require_auth)):
     if not is_valid_solana_address(program_id):
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
 
-    # Ownership check
+    # Ownership check — resolve linked wallets to primary user
     supabase = get_supabase()
-    user_row = (
-        supabase.table("users")
-        .select("id")
-        .eq("wallet_pubkey", wallet)
-        .single()
-        .execute()
-    )
-    if not user_row.data:
+    user_id = resolve_wallet_to_user_id(wallet)
+    if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
     program_row = (
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
-        .eq("user_id", user_row.data["id"])
+        .eq("user_id", user_id)
         .execute()
     )
     if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
+
+    # Plan gate — same requirement as /generate
+    has_access = await _check_plan_feature(wallet, "ai_insights")
+    if not has_access:
+        raise HTTPException(
+            status_code=403,
+            detail="AI Insights require a Team or Protocol plan. Upgrade at /settings.",
+        )
 
     insights = await cache_get(insights_cache_key(program_id))
     if not insights:

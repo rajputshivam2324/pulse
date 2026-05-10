@@ -10,10 +10,14 @@ Also supports incremental sync via `after` cursor (signature-based).
 import asyncio
 import httpx
 import os
+import logging
 from typing import Optional
+
+logger = logging.getLogger(__name__)
 
 HELIUS_API_KEY = os.getenv("HELIUS_API_KEY")
 SOLANA_NETWORK = os.getenv("SOLANA_NETWORK", "devnet")
+TREASURY_WALLET_ADDRESS = os.getenv("TREASURY_WALLET_ADDRESS", "")
 
 # Network-aware Helius base URL
 HELIUS_BASE = (
@@ -107,7 +111,10 @@ async def get_all_transactions(
             break
 
         all_txns.extend(new_batch)
-        before = batch[-1]["signature"]
+        last_sig = batch[-1].get("signature")
+        if not last_sig:
+            break
+        before = last_sig
         if len(batch) < HELIUS_PAGE_SIZE:
             break
 
@@ -311,3 +318,46 @@ async def register_webhook(program_address: str, webhook_url: str) -> dict:
         )
         response.raise_for_status()
         return response.json()
+
+async def verify_payment_transaction(signature: str, expected_wallet: str, expected_amount: float) -> bool:
+    """
+    Verify a payment transaction from Helius Enhanced API.
+    Checks that the tx transfers at least expected_amount of USDC from expected_wallet to TREASURY_WALLET_ADDRESS.
+    """
+    if not TREASURY_WALLET_ADDRESS:
+        logger.warning("TREASURY_WALLET_ADDRESS not set, skipping verification")
+        return True # In dev, if treasury is missing, pass verification
+
+    url = f"{HELIUS_BASE}/transactions"
+    params = {"api-key": HELIUS_API_KEY}
+    payload = {"transactions": [signature]}
+    
+    async with httpx.AsyncClient(timeout=10.0) as client:
+        try:
+            response = await client.post(url, params=params, json=payload)
+            response.raise_for_status()
+            data = response.json()
+            if not data or not isinstance(data, list) or len(data) == 0:
+                return False
+            
+            tx = data[0]
+            # Check for USDC mints (Mainnet or Devnet)
+            USDC_MINTS = {
+                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", # Mainnet
+                "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"  # Devnet
+            }
+            
+            for transfer in tx.get("tokenTransfers", []):
+                mint = transfer.get("mint")
+                if mint in USDC_MINTS:
+                    from_user = transfer.get("fromUserAccount", "")
+                    to_user = transfer.get("toUserAccount", "")
+                    amount = transfer.get("tokenAmount", 0)
+                    
+                    if from_user == expected_wallet and to_user == TREASURY_WALLET_ADDRESS and float(amount) >= expected_amount:
+                        return True
+                        
+            return False
+        except Exception as e:
+            logger.error("Failed to verify payment transaction", extra={"signature": signature, "error": str(e)})
+            return False

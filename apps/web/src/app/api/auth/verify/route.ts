@@ -2,7 +2,15 @@ import { NextRequest, NextResponse } from 'next/server'
 import nacl from 'tweetnacl'
 import bs58 from 'bs58'
 import * as jose from 'jose'
-import { createClient } from 'redis'
+import { getRedis } from '@/lib/redis'
+import { createClient } from '@supabase/supabase-js'
+
+function getSupabase() {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY
+  if (!url || !key) throw new Error('Supabase env vars required')
+  return createClient(url, key)
+}
 
 /**
  * SIWS Signature verification + JWT issuance.
@@ -12,7 +20,6 @@ import { createClient } from 'redis'
  * Fix #5: Require JWT_SECRET env var — no insecure defaults.
  * Fix #11: Set `sub` claim to wallet address for cross-service compatibility.
  * Fix #12: Validate nonce in both Redis and in-memory fallback paths.
- * Fix #19: Reuse Redis connection properly.
  */
 
 function getJwtSecret() {
@@ -21,19 +28,6 @@ function getJwtSecret() {
   return new TextEncoder().encode(secret)
 }
 
-let redisClient: ReturnType<typeof createClient> | null = null
-
-async function getRedis() {
-  if (!redisClient) {
-    const url = process.env.UPSTASH_REDIS_URL
-    if (url) {
-      redisClient = createClient({ url })
-      redisClient.on('error', (err) => console.error('Redis client error:', err))
-      await redisClient.connect()
-    }
-  }
-  return redisClient
-}
 
 // Fallback in-memory store for local dev when Redis is not configured
 const nonceStoreFallback = new Map<string, { nonce: string; expires: number }>()
@@ -101,6 +95,19 @@ export async function POST(req: NextRequest) {
       .setIssuedAt()
       .setExpirationTime('7d')
       .sign(getJwtSecret())
+
+    // Ensure user row exists in DB — do this AFTER JWT issuance so auth
+    // always succeeds even if DB write has a transient failure.
+    try {
+      const supabase = getSupabase()
+      await supabase
+        .from('users')
+        .upsert({ wallet_pubkey: wallet, plan: 'free' }, { onConflict: 'wallet_pubkey', ignoreDuplicates: true })
+        .select('id')
+    } catch (dbErr) {
+      // Non-fatal: user creation handled as fallback in /api/programs too
+      console.warn('User upsert on verify failed (non-fatal):', dbErr)
+    }
 
     return NextResponse.json({ token })
   } catch (error) {

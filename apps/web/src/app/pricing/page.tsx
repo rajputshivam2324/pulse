@@ -3,7 +3,6 @@
 import Link from 'next/link'
 
 const PLANS = [
-const PLANS = [
   {
     name: 'Free',
     price: '$0',
@@ -49,7 +48,6 @@ const PLANS = [
     cta: 'Contact Us',
     popular: false,
   },
-]
 ]
 
 export default function PricingPage() {

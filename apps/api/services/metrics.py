@@ -21,7 +21,13 @@ def compute_daily_active_wallets(
     daily: dict[str, dict] = defaultdict(lambda: {"wallets": set(), "count": 0})
 
     for txn in transactions:
-        ts = datetime.fromisoformat(txn["timestamp"])
+        ts_raw = txn.get("timestamp")
+        if not ts_raw:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_raw))
+        except (ValueError, TypeError):
+            continue
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         if ts < cutoff:
@@ -73,7 +79,13 @@ def compute_retention_cohorts(transactions: list[dict]) -> list[dict]:
 
     for txn in transactions:
         wallet = txn["wallet_address"]
-        ts = datetime.fromisoformat(txn["timestamp"])
+        ts_raw = txn.get("timestamp")
+        if not ts_raw:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_raw))
+        except (ValueError, TypeError):
+            continue
         if ts.tzinfo is None:
             ts = ts.replace(tzinfo=timezone.utc)
         iso = ts.isocalendar()
@@ -187,7 +199,7 @@ def compute_per_type_retention(transactions: list[dict]) -> list[dict]:
     wallet_first_type: dict[str, str] = {}
     wallet_tx_counts: dict[str, int] = defaultdict(int)
 
-    for txn in sorted(transactions, key=lambda t: t["timestamp"]):
+    for txn in sorted(transactions, key=lambda t: t.get("timestamp") or ""):
         wallet = txn["wallet_address"]
         if wallet not in wallet_first_type:
             wallet_first_type[wallet] = txn["transaction_type"]
@@ -219,6 +231,89 @@ def compute_per_type_retention(transactions: list[dict]) -> list[dict]:
     return sorted(result, key=lambda x: x["return_rate"], reverse=True)
 
 
+def compute_activity_heatmap(transactions: list[dict], days: int = 30) -> list[dict]:
+    cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+    heatmap = defaultdict(int)
+    for txn in transactions:
+        ts_raw = txn.get("timestamp")
+        if not ts_raw:
+            continue
+        try:
+            ts = datetime.fromisoformat(str(ts_raw))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+            if ts >= cutoff:
+                # 0=Monday, 6=Sunday. In JS we use 0=Sun, 1=Mon, so shift it.
+                day_js = (ts.weekday() + 1) % 7
+                heatmap[(ts.hour, day_js)] += 1
+        except Exception:
+            pass
+            
+    result = []
+    for (hour, day), count in heatmap.items():
+        result.append({"hour": hour, "day": day, "count": count})
+    return result
+
+
+def compute_top_wallets(transactions: list[dict]) -> list[dict]:
+    wallet_stats = defaultdict(lambda: {"txns": 0, "volume_sol": 0.0})
+    total_vol = 0.0
+    for txn in transactions:
+        wallet = txn["wallet_address"]
+        vol = float(txn.get("amount_sol") or 0.0)
+        wallet_stats[wallet]["txns"] += 1
+        wallet_stats[wallet]["volume_sol"] += vol
+        total_vol += vol
+        
+    sorted_wallets = sorted(wallet_stats.items(), key=lambda x: x[1]["volume_sol"], reverse=True)[:5]
+    result = []
+    for wallet, stats in sorted_wallets:
+        share = (stats["volume_sol"] / total_vol * 100) if total_vol > 0 else 0
+        result.append({
+            "address": wallet,
+            "txns": stats["txns"],
+            "volume_sol": stats["volume_sol"],
+            "share_pct": round(share, 1)
+        })
+    return result
+
+
+def compute_drop_off_breakdown(transactions: list[dict]) -> list[dict]:
+    """Breakdown of wallets that dropped off after exactly 1 transaction."""
+    wallet_txns = defaultdict(list)
+    for txn in transactions:
+        wallet_txns[txn["wallet_address"]].append(txn)
+        
+    breakdown = {
+        "Bounced (no return)": 0,
+        "Went dormant >14d": 0,
+        "Recent drop-off (<14d)": 0,
+    }
+    
+    now = datetime.now(timezone.utc)
+    for wallet, txns in wallet_txns.items():
+        if len(txns) == 1:
+            txn = txns[0]
+            ts_raw = txn.get("timestamp")
+            if ts_raw:
+                try:
+                    ts = datetime.fromisoformat(str(ts_raw))
+                    if ts.tzinfo is None: ts = ts.replace(tzinfo=timezone.utc)
+                    days_since = (now - ts).days
+                    if days_since > 30:
+                        breakdown["Bounced (no return)"] += 1
+                    elif days_since > 14:
+                        breakdown["Went dormant >14d"] += 1
+                    else:
+                        breakdown["Recent drop-off (<14d)"] += 1
+                except Exception:
+                    breakdown["Bounced (no return)"] += 1
+            else:
+                breakdown["Bounced (no return)"] += 1
+                
+    return [{"label": k, "value": v} for k, v in breakdown.items() if v > 0]
+
+
 def build_metrics_payload(transactions: list[dict]) -> dict:
     """
     Assemble the complete metrics payload.
@@ -229,6 +324,9 @@ def build_metrics_payload(transactions: list[dict]) -> dict:
     funnel = compute_transaction_funnel(transactions)
     drop_off = compute_drop_off_by_type(transactions)
     per_type_retention = compute_per_type_retention(transactions)
+    activity_heatmap = compute_activity_heatmap(transactions)
+    whales = compute_top_wallets(transactions)
+    drop_off_breakdown = compute_drop_off_breakdown(transactions)
 
     total_wallets = len(set(t["wallet_address"] for t in transactions))
     avg_daw = (
@@ -276,4 +374,7 @@ def build_metrics_payload(transactions: list[dict]) -> dict:
         "funnel": funnel,
         "drop_off_by_type": drop_off[:5],
         "per_type_retention": per_type_retention,
+        "activity_heatmap": activity_heatmap,
+        "whales": whales,
+        "drop_off_breakdown": drop_off_breakdown,
     }

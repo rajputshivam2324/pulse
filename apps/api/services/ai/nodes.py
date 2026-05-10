@@ -22,6 +22,13 @@ logger = logging.getLogger(__name__)
 # Module-level model singleton — initialized lazily
 _model: ChatNVIDIA | None = None
 
+# NVIDIA NIM model to use — must be a known, supported type on api.nvidia.com
+_NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "mistralai/mistral-nemotron")
+
+# Timeout in seconds for each LLM HTTP request.
+# aiohttp default is 5 s which is far too short for large LLM responses.
+_LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
+
 
 def _get_model() -> ChatNVIDIA:
     """Lazily create and cache the ChatNVIDIA model singleton."""
@@ -31,10 +38,14 @@ def _get_model() -> ChatNVIDIA:
         if not api_key:
             raise RuntimeError("NVIDIA_API_KEY environment variable is not set")
         _model = ChatNVIDIA(
-            model="moonshotai/kimi-k2-instruct-0905",
+            model=_NVIDIA_MODEL,
             api_key=api_key,
             temperature=0.6,
+            top_p=0.7,
+            max_tokens=4096,
+            timeout=_LLM_TIMEOUT_SECONDS,
         )
+        logger.info("ChatNVIDIA model initialised", extra={"model": _NVIDIA_MODEL, "timeout": _LLM_TIMEOUT_SECONDS})
     return _model
 
 

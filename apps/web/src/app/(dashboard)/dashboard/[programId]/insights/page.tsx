@@ -48,7 +48,8 @@ export default function AIInsightsPage() {
       hasAttempted.current = true
       handleGenerateInsights()
     }
-  }, [hasAccess, insights, isGeneratingInsights, programId, router, error])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [hasAccess, insights, isGeneratingInsights, programId, router, error, user.token])
 
   // Fake scanning progress animation during generation
   useEffect(() => {
@@ -214,7 +215,7 @@ export default function AIInsightsPage() {
               {insights.headline}
             </h2>
             <p className="text-black/60 text-sm f1-m leading-relaxed">
-              {insights.biggest_problem}
+              {insights.biggestProblem}
             </p>
           </div>
 
@@ -229,15 +230,15 @@ export default function AIInsightsPage() {
                 <circle cx="64" cy="64" r="60" fill="none" stroke="rgba(0,0,0,0.05)" strokeWidth="4" />
                 <circle 
                   cx="64" cy="64" r="60" fill="none" 
-                  stroke={(insights.health_score ?? 0) >= 70 ? '#10b981' : (insights.health_score ?? 0) >= 40 ? '#f59e0b' : '#ef4444'} 
+                  stroke={(insights.healthScore ?? 0) >= 70 ? '#10b981' : (insights.healthScore ?? 0) >= 40 ? '#f59e0b' : '#ef4444'} 
                   strokeWidth="4" strokeLinecap="round" 
                   strokeDasharray="377" 
-                  strokeDashoffset={377 - ((insights.health_score ?? 0) / 100) * 377}
+                  strokeDashoffset={377 - ((insights.healthScore ?? 0) / 100) * 377}
                   style={{ transition: 'stroke-dashoffset 1.5s cubic-bezier(0.4, 0, 0.2, 1)' }}
                 />
               </svg>
               <div className="relative z-10 flex flex-col items-center">
-                <span className="text-4xl f1-h font-bold text-black/80">{insights.health_score ?? 0}</span>
+                <span className="text-4xl f1-h font-bold text-black/80">{insights.healthScore ?? 0}</span>
                 <span className="text-[10px] text-black/40 f1-m mt-1">/ 100</span>
               </div>
             </div>
@@ -288,14 +289,14 @@ export default function AIInsightsPage() {
 
         {/* Retention & Quick Wins row */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pb-12">
-          {insights.retention_diagnosis && (
+          {insights.retentionDiagnosis && (
             <div className="plate p-8 group">
               <h3 className="text-lg f1-h font-bold text-black/80 mb-6 flex items-center gap-3 uppercase">
                 <svg className="w-5 h-5 text-black/50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
                 Retention Matrix
-                {insights.retention_diagnosis.retention_grade && (
+                {(insights.retentionDiagnosis.retention_grade as string) && (
                   <span className="ml-auto text-[10px] f1-m text-black/40">
-                    GRADE: <span className="text-black/80 font-bold">{insights.retention_diagnosis.retention_grade}</span>
+                    GRADE: <span className="text-black/80 font-bold">{insights.retentionDiagnosis.retention_grade as React.ReactNode}</span>
                   </span>
                 )}
               </h3>
@@ -303,17 +304,17 @@ export default function AIInsightsPage() {
               <div className="space-y-4 relative z-10">
                 <div className="p-4 rounded-sm border border-black/10 bg-black/5 shadow-[inset_0_1px_3px_rgba(0,0,0,0.05)]">
                   <p className="text-[10px] f1-m text-black/50 uppercase tracking-widest mb-2">Primary Churn Vector</p>
-                  <p className="text-xs f1-m text-black/80">{insights.retention_diagnosis.main_churn_trigger}</p>
+                  <p className="text-xs f1-m text-black/80">{insights.retentionDiagnosis.main_churn_trigger as React.ReactNode}</p>
                 </div>
                 <div className="p-4 rounded-sm border border-black/10 bg-black/5 shadow-[inset_0_1px_3px_rgba(0,0,0,0.05)]">
                   <p className="text-[10px] f1-m text-black/50 uppercase tracking-widest mb-2">Power User Signature</p>
-                  <p className="text-xs f1-m text-black/80">{insights.retention_diagnosis.power_user_signal}</p>
+                  <p className="text-xs f1-m text-black/80">{insights.retentionDiagnosis.power_user_signal as React.ReactNode}</p>
                 </div>
               </div>
             </div>
           )}
 
-          {insights.quick_wins?.length > 0 && (
+          {insights.quickWins?.length > 0 && (
             <div className="plate p-8 group">
               <h3 className="text-lg f1-h font-bold text-black/80 mb-6 flex items-center gap-3 uppercase">
                 <svg className="w-5 h-5 text-black/50" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
@@ -321,7 +322,7 @@ export default function AIInsightsPage() {
               </h3>
               
               <div className="space-y-3 relative z-10">
-                {insights.quick_wins.map((win: string, i: number) => (
+                {insights.quickWins.map((win: string, i: number) => (
                   <div key={i} className="flex gap-3 items-start p-3 rounded-sm hover:bg-black/5 transition-colors border border-transparent hover:border-black/10">
                     <span className="text-black/40 mt-0.5">▹</span>
                     <span className="text-xs f1-m text-black/70 leading-relaxed">{win}</span>

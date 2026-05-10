@@ -1,42 +1,120 @@
 'use client'
 
+/**
+ * Landing Page — PUBLIC marketing page.
+ *
+ * Founder Flow (production-grade):
+ *
+ * FIRST VISIT:
+ *   1. See marketing page → click "Select Wallet" in hero
+ *   2. Wallet modal opens → select Phantom/Solflare
+ *   3. Wallet connects → SIWS auto-triggers (ONE sign)
+ *   4. After signing → redirect to /dashboard
+ *   5. /dashboard shows "Add Your First Program"
+ *
+ * RETURNING VISIT:
+ *   1. Land on / → wallet auto-reconnects from adapter cache
+ *   2. See "Go to Dashboard" button (JWT still valid, no re-sign)
+ *   3. Click → /dashboard → see programs list
+ *
+ * RULES:
+ *   - Never auto-redirect from landing page
+ *   - One click = wallet connect + SIWS sign (auto-triggered)
+ *   - Returning users see "Go to Dashboard" immediately
+ *   - Landing page always accessible, even when authenticated
+ */
+
 import dynamic from 'next/dynamic'
 import Link from 'next/link'
 import { useWallet } from '@solana/wallet-adapter-react'
 import { useRouter } from 'next/navigation'
-import { useEffect } from 'react'
+import { useState, useCallback, useEffect, useRef } from 'react'
 import { usePulseStore } from '@/store'
+import { signInWithSolana } from '@/lib/auth'
+import AnimatedMetallicBackground from '@/components/AnimatedMetallicBackground'
 
 const WalletMultiButton = dynamic(
   () => import('@solana/wallet-adapter-react-ui').then((mod) => mod.WalletMultiButton),
   { ssr: false }
 )
 
-import AnimatedMetallicBackground from '@/components/AnimatedMetallicBackground'
+const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 
 export default function LandingPage() {
-  const { connected } = useWallet()
+  const { connected, publicKey, signMessage } = useWallet()
   const router = useRouter()
-  const activeProgram = usePulseStore((s) => s.activeProgram)
+  const { user, setUser, _hydrated } = usePulseStore()
+  const [isAuthenticating, setIsAuthenticating] = useState(false)
+  const [authError, setAuthError] = useState<string | null>(null)
+  const autoSignAttemptedRef = useRef(false)
 
+  const isAuthenticated = _hydrated && !!user.token
+
+  // Auto-trigger SIWS when wallet connects AND user doesn't have a session yet.
+  // This is the one-click flow: user clicks "Select Wallet" → picks wallet → 
+  // wallet connects → this effect fires → SIWS runs → user lands on /dashboard.
+  // The ref prevents re-triggering on React strict mode double-render.
   useEffect(() => {
-    if (connected && activeProgram) {
-      router.push(`/dashboard/${activeProgram.programAddress}`)
+    if (
+      connected &&
+      publicKey &&
+      signMessage &&
+      !user.token &&
+      !isAuthenticating &&
+      !autoSignAttemptedRef.current
+    ) {
+      autoSignAttemptedRef.current = true
+      void handleAutoSignIn()
     }
-  }, [connected, activeProgram, router])
+    // Reset ref when wallet disconnects so next connect triggers SIWS
+    if (!connected) {
+      autoSignAttemptedRef.current = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [connected, publicKey, signMessage, user.token])
 
-  const handleGetStarted = () => {
-    if (connected) {
-      router.push('/onboarding')
+  const handleAutoSignIn = useCallback(async () => {
+    if (!publicKey || !signMessage || isAuthenticating) return
+    setIsAuthenticating(true)
+    setAuthError(null)
+    try {
+      const token = await signInWithSolana(publicKey.toBase58(), signMessage)
+      let plan = 'free'
+      try {
+        const meRes = await fetch(`${API_BASE}/user/me`, {
+          headers: { Authorization: `Bearer ${token}` },
+        })
+        if (meRes.ok) {
+          const me = await meRes.json()
+          plan = me.plan || 'free'
+        }
+      } catch { /* non-fatal */ }
+
+      setUser({ wallet: publicKey.toBase58(), token, plan })
+      router.push('/dashboard')
+    } catch (err) {
+      console.error('SIWS failed:', err)
+      setAuthError('Wallet signing was cancelled or failed. Click below to retry.')
+    } finally {
+      setIsAuthenticating(false)
     }
-  }
+  }, [publicKey, signMessage, isAuthenticating, router, setUser])
+
+  const handleGoToDashboard = useCallback(() => {
+    router.push('/dashboard')
+  }, [router])
+
+  const handleRetryAuth = useCallback(() => {
+    setAuthError(null)
+    autoSignAttemptedRef.current = false
+    void handleAutoSignIn()
+  }, [handleAutoSignIn])
 
   return (
     <div className="min-h-screen relative overflow-hidden">
-      
-      {/* HTML5 Canvas Animated Metallic Background */}
       <AnimatedMetallicBackground />
-      {/* Navigation (Top Rail) */}
+
+      {/* Navigation */}
       <nav className="fixed top-0 left-0 right-0 z-50 machined-panel px-8 py-3 flex items-center justify-between">
         <Link href="/" className="logo flex items-center gap-3 no-underline group">
           <div className="w-8 h-8 rounded-sm bg-gradient-to-b from-[#444] to-[#111] flex items-center justify-center border border-[#000] shadow-[inset_0_1px_0_rgba(255,255,255,0.3)]">
@@ -48,53 +126,82 @@ export default function LandingPage() {
           <a href="#features" className="f1-h text-xs font-bold uppercase tracking-widest text-black/70 hover:text-black transition-colors">Data</a>
           <a href="#how-it-works" className="f1-h text-xs font-bold uppercase tracking-widest text-black/70 hover:text-black transition-colors">SysReq</a>
           <Link href="/pricing" className="f1-h text-xs font-bold uppercase tracking-widest text-black/70 hover:text-black transition-colors">License</Link>
+          {isAuthenticated && (
+            <Link href="/dashboard" className="f1-h text-xs font-bold uppercase tracking-widest text-black/70 hover:text-black transition-colors">Dashboard</Link>
+          )}
+          {isAuthenticated && (
+            <Link href="/account" className="f1-h text-xs font-bold uppercase tracking-widest text-black/70 hover:text-black transition-colors">Account</Link>
+          )}
           <div className="ml-2 pl-4 border-l border-black/30 shadow-[inset_1px_0_0_rgba(255,255,255,0.3)] h-6 flex items-center">
             <WalletMultiButton />
           </div>
         </div>
       </nav>
 
-      {/* Hero Section */}
+      {/* Hero */}
       <section className="relative z-10 min-h-screen flex flex-col items-center justify-center text-center px-6 pt-20">
         <div className="animate-slide-up max-w-4xl mx-auto flex flex-col items-center">
-          
-          <div className="mt-8"></div>
-
+          <div className="mt-8" />
           <h1 className="f1-h text-5xl sm:text-7xl lg:text-8xl font-bold leading-none tracking-tight text-black mb-6 uppercase drop-shadow-[0_2px_4px_rgba(0,0,0,0.1)]">
             The Mixpanel<br/>for Solana
           </h1>
-
           <p className="f1-m text-lg sm:text-xl font-medium text-black/60 max-w-2xl mx-auto mb-10 leading-relaxed">
             On-chain product analytics that tells you exactly what is broken and what to fix. Paste program ID. Compile insights in 30s.
           </p>
 
           <div className="flex flex-col items-center gap-4">
             <div className="plate p-2">
-              {!connected ? (
-                <WalletMultiButton />
-              ) : (
-                <button onClick={handleGetStarted} className="btn-hero">
-                  <span className="btn-label flex items-center gap-2"><span className="status-dot"></span> Initiate Scan</span>
+              {isAuthenticated ? (
+                /* RETURNING USER: valid session → go to dashboard */
+                <button onClick={handleGoToDashboard} className="btn-hero">
+                  <span className="btn-label flex items-center gap-2">
+                    <span className="status-dot on" /> Go to Dashboard
+                  </span>
                 </button>
+              ) : isAuthenticating ? (
+                /* SIGNING: SIWS in progress */
+                <div className="flex items-center gap-3 px-6 py-3">
+                  <svg className="animate-spin h-4 w-4 text-black/40" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25" />
+                    <path fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4z" className="opacity-75" />
+                  </svg>
+                  <span className="f1-m text-[10px] uppercase tracking-widest text-black/60">
+                    Sign the message in your wallet…
+                  </span>
+                </div>
+              ) : authError ? (
+                /* ERROR: signing failed or was rejected */
+                <div className="flex flex-col items-center gap-3 px-4 py-3">
+                  <p className="text-[10px] f1-m uppercase tracking-widest text-red-600 font-bold">
+                    {authError}
+                  </p>
+                  <button onClick={handleRetryAuth} className="btn-hero">
+                    <span className="btn-label flex items-center gap-2">
+                      <span className="status-dot" /> Retry Sign-In
+                    </span>
+                  </button>
+                </div>
+              ) : (
+                /* NEW USER: no wallet connected → show wallet button */
+                /* Once they pick a wallet, useEffect auto-triggers SIWS */
+                <WalletMultiButton />
               )}
             </div>
-            
+
             <div className="flex items-center gap-2 mt-4">
-              <div className="w-1.5 h-1.5 bg-black/40 rounded-full shadow-[0_1px_0_rgba(255,255,255,0.5)]"></div>
+              <div className="w-1.5 h-1.5 bg-black/40 rounded-full shadow-[0_1px_0_rgba(255,255,255,0.5)]" />
               <span className="f1-m text-[10px] uppercase tracking-widest text-black/60">
-                Auth via Wallet Protocol
+                {isAuthenticated ? 'Session Active' : 'One-Click Wallet Auth'}
               </span>
-              <div className="w-1.5 h-1.5 bg-black/40 rounded-full shadow-[0_1px_0_rgba(255,255,255,0.5)]"></div>
+              <div className="w-1.5 h-1.5 bg-black/40 rounded-full shadow-[0_1px_0_rgba(255,255,255,0.5)]" />
             </div>
           </div>
         </div>
       </section>
 
-      {/* Hardware Panel - Features */}
+      {/* Features */}
       <div id="features" className="relative z-10 px-6 sm:px-12 pb-24 max-w-6xl mx-auto">
         <div className="plate p-8 mb-24">
-
-
           <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
             <div className="p-4 bg-black/5 rounded-sm border border-black/10 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1),0_1px_0_rgba(255,255,255,0.5)]">
               <div className="w-10 h-10 bg-gradient-to-b from-[#555] to-[#222] rounded-sm mb-4 flex items-center justify-center border border-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]">
@@ -105,7 +212,6 @@ export default function LandingPage() {
               <h3 className="f1-h text-lg font-bold uppercase mb-2 text-black/80">Metrics</h3>
               <p className="f1-m text-xs text-black/60 leading-relaxed">DAW, retention cohorts, funnel drop-off computed from chain tx history. Hard data.</p>
             </div>
-
             <div className="p-4 bg-black/5 rounded-sm border border-black/10 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1),0_1px_0_rgba(255,255,255,0.5)]">
               <div className="w-10 h-10 bg-gradient-to-b from-[#555] to-[#222] rounded-sm mb-4 flex items-center justify-center border border-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]">
                 <svg className="w-5 h-5 stroke-white" fill="none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -115,7 +221,6 @@ export default function LandingPage() {
               <h3 className="f1-h text-lg font-bold uppercase mb-2 text-black/80">AI Insights</h3>
               <p className="f1-m text-xs text-black/60 leading-relaxed">LangGraph pipeline directs repair operations. Specific numbers and prescribed actions.</p>
             </div>
-
             <div className="p-4 bg-black/5 rounded-sm border border-black/10 shadow-[inset_0_1px_2px_rgba(0,0,0,0.1),0_1px_0_rgba(255,255,255,0.5)]">
               <div className="w-10 h-10 bg-gradient-to-b from-[#555] to-[#222] rounded-sm mb-4 flex items-center justify-center border border-black/50 shadow-[inset_0_1px_0_rgba(255,255,255,0.2)]">
                 <svg className="w-5 h-5 stroke-white" fill="none" viewBox="0 0 24 24" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -128,57 +233,50 @@ export default function LandingPage() {
           </div>
         </div>
 
-        {/* How It Works - Step sequence */}
+        {/* How It Works */}
         <div id="how-it-works" className="mb-24">
           <div className="flex items-center gap-4 mb-10">
-            <span className="status-dot"></span>
+            <span className="status-dot" />
             <h2 className="f1-h text-sm uppercase tracking-widest font-bold text-black/70">Execution Sequence</h2>
-            <div className="flex-1 h-px bg-black/20 shadow-[0_1px_0_rgba(255,255,255,0.3)]"></div>
+            <div className="flex-1 h-px bg-black/20 shadow-[0_1px_0_rgba(255,255,255,0.3)]" />
           </div>
-
           <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
-            <div className="plate p-6 text-center group hover:-translate-y-1 transition-transform">
-              <div className="w-12 h-12 bg-black/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-black/20 shadow-[inset_0_2px_4px_rgba(0,0,0,0.2),0_1px_0_rgba(255,255,255,0.5)]">
-                <span className="f1-h text-xl font-bold text-black/80">1</span>
+            {[
+              ['1', 'Connect', 'Select your Solana wallet. One-click authentication.'],
+              ['2', 'Input ID', 'Paste program address. We index the transaction graph.'],
+              ['3', 'Analyze', 'LangGraph outputs retention and churn vectors.'],
+            ].map(([num, title, desc]) => (
+              <div key={num} className="plate p-6 text-center group hover:-translate-y-1 transition-transform">
+                <div className="w-12 h-12 bg-black/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-black/20 shadow-[inset_0_2px_4px_rgba(0,0,0,0.2),0_1px_0_rgba(255,255,255,0.5)]">
+                  <span className="f1-h text-xl font-bold text-black/80">{num}</span>
+                </div>
+                <h4 className="f1-h text-lg font-bold uppercase mb-2 text-black/80">{title}</h4>
+                <p className="f1-m text-[10px] text-black/60 uppercase tracking-widest">{desc}</p>
               </div>
-              <h4 className="f1-h text-lg font-bold uppercase mb-2 text-black/80">Connect</h4>
-              <p className="f1-m text-[10px] text-black/60 uppercase tracking-widest">Initialize via Solana wallet. No external auth required.</p>
-            </div>
-            
-            <div className="plate p-6 text-center group hover:-translate-y-1 transition-transform delay-100">
-              <div className="w-12 h-12 bg-black/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-black/20 shadow-[inset_0_2px_4px_rgba(0,0,0,0.2),0_1px_0_rgba(255,255,255,0.5)]">
-                <span className="f1-h text-xl font-bold text-black/80">2</span>
-              </div>
-              <h4 className="f1-h text-lg font-bold uppercase mb-2 text-black/80">Input ID</h4>
-              <p className="f1-m text-[10px] text-black/60 uppercase tracking-widest">Paste program address. We index the transaction graph.</p>
-            </div>
-
-            <div className="plate p-6 text-center group hover:-translate-y-1 transition-transform delay-200">
-              <div className="w-12 h-12 bg-black/10 rounded-full flex items-center justify-center mx-auto mb-4 border border-black/20 shadow-[inset_0_2px_4px_rgba(0,0,0,0.2),0_1px_0_rgba(255,255,255,0.5)]">
-                <span className="f1-h text-xl font-bold text-black/80">3</span>
-              </div>
-              <h4 className="f1-h text-lg font-bold uppercase mb-2 text-black/80">Analyze</h4>
-              <p className="f1-m text-[10px] text-black/60 uppercase tracking-widest">LangGraph outputs retention and churn vectors.</p>
-            </div>
+            ))}
           </div>
         </div>
 
-        {/* Call to Action */}
+        {/* CTA */}
         <div className="plate p-12 text-center relative overflow-hidden">
-          {/* subtle moving light effect across the plate */}
-          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full animate-[shimmerSlide_3s_infinite]"></div>
-
+          <div className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent -translate-x-full animate-[shimmerSlide_3s_infinite]" />
           <h3 className="f1-h text-3xl font-bold uppercase mb-4 text-black/90">Deploy Pulse Analytics</h3>
           <p className="f1-m text-[10px] uppercase tracking-widest text-black/60 mb-8 max-w-md mx-auto">
             Join 500+ programs optimizing their metrics.
           </p>
           <div className="inline-block relative z-10">
-            <WalletMultiButton />
+            {isAuthenticated ? (
+              <button onClick={handleGoToDashboard} className="btn-hero">
+                <span className="btn-label">Go to Dashboard</span>
+              </button>
+            ) : (
+              <WalletMultiButton />
+            )}
           </div>
         </div>
       </div>
 
-      {/* Footer (Bottom Rail) */}
+      {/* Footer */}
       <footer className="relative z-10 machined-panel border-t border-black/30 shadow-[0_-1px_0_rgba(255,255,255,0.5)] pt-8 pb-4 px-8 mt-12">
         <div className="max-w-6xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
           <div className="flex items-center gap-3">
@@ -187,7 +285,6 @@ export default function LandingPage() {
             </div>
             <span className="f1-h text-xs font-bold uppercase tracking-widest text-black/80">Pulse Sys.</span>
           </div>
-          
           <div className="flex items-center gap-6">
             <a href="#" className="f1-m text-[10px] uppercase tracking-widest text-black/50 hover:text-black transition-colors">Privacy</a>
             <a href="#" className="f1-m text-[10px] uppercase tracking-widest text-black/50 hover:text-black transition-colors">Terms</a>
