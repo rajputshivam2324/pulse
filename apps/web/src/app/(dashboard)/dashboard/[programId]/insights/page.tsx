@@ -236,8 +236,8 @@ export default function AIInsightsPage() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const programId = params.programId as string
-  const chatRef = useRef<HTMLElement | null>(null)
   const hasAttempted = useRef(false)
+  const idleRetryCount = useRef(0)
 
   // IMPORTANT: use selectors (with shallow) to avoid rerendering the entire page
   // on any unrelated Zustand state change. This page renders heavy charts/tables.
@@ -261,27 +261,14 @@ export default function AIInsightsPage() {
     }),
   ))
 
-  const { insightChatByProgram, insightChatLoadingByProgram, addInsightChatMessage, setInsightChatLoading } = usePulseStore(useShallow(
-    (s) => ({
-      insightChatByProgram: s.insightChatByProgram,
-      insightChatLoadingByProgram: s.insightChatLoadingByProgram,
-      addInsightChatMessage: s.addInsightChatMessage,
-      setInsightChatLoading: s.setInsightChatLoading,
-    }),
-  ))
-
   const insights = programId ? insightsByProgram[programId] : null
   const metrics = programId ? metricsByProgram[programId] : null
-  const chatMessages = programId ? insightChatByProgram[programId] || [] : []
-  const chatLoading = programId ? insightChatLoadingByProgram[programId] || false : false
   const hasAccess = canAccess(user.plan, 'ai_insights')
 
   const [error, setError] = useState<string | null>(null)
   const [scanProgress, setScanProgress] = useState(0)
   const [history, setHistory] = useState<HistoryReport[]>([])
   const [historyOpen, setHistoryOpen] = useState(false)
-  const [chatInput, setChatInput] = useState('')
-  const [suggestions, setSuggestions] = useState<string[]>([])
   const [stream, setStream] = useState<StreamState>({ active: false, partialReport: null, partialInsights: [], error: null })
   const streamAbort = useRef<AbortController | null>(null)
 
@@ -303,7 +290,7 @@ export default function AIInsightsPage() {
     if (insightList.length) return anomalyChips(insightList[0], normalizedMetrics.retentionRows).slice(0, 4)
     return []
   }, [insightList, normalizedMetrics.retentionRows, suggestedFromInsights])
-  const visibleSuggestions = suggestions.length ? suggestions : baseSuggestions
+  const visibleSuggestions = baseSuggestions
 
   const fetchHistory = useCallback(async () => {
     if (!user.token || !programId) return
@@ -380,12 +367,18 @@ export default function AIInsightsPage() {
           if (evt === 'final') {
             const report = (data.report || null) as AnyRecord | null
             if (!report) return
-            setInsights(programId, report as any)
+            const normalizedReport: Record<string, unknown> & { insights: Record<string, unknown>[] } = {
+              insights: [],
+              ...report,
+              insights: Array.isArray(report.insights) ? (report.insights as Record<string, unknown>[]) : [],
+            }
+            setInsights(programId, normalizedReport as never)
             setStream((s) => ({ ...s, active: false, status: 'done', partialReport: null, partialInsights: [] }))
             void fetchHistory()
           }
           if (evt === 'error') {
-            setStream((s) => ({ ...s, error: String((data as any).error || 'Streaming error') }))
+            const streamError = typeof data.error === 'string' ? data.error : 'Streaming error'
+            setStream((s) => ({ ...s, error: streamError }))
           }
         },
         abort.signal
@@ -422,45 +415,8 @@ export default function AIInsightsPage() {
     }
   }, [fetchHistory, handleGenerateInsights, programId, setInsights, user.token])
 
-  const sendFollowup = useCallback(async (override?: string) => {
-    const question = (override ?? chatInput).trim()
-    if (!question || !user.token || !programId || chatLoading) return
-
-    setChatInput('')
-    addInsightChatMessage(programId, { role: 'user', content: question })
-    setInsightChatLoading(programId, true)
-    try {
-      const res = await fetch(`${API_BASE}/insights/followup/${programId}`, {
-        method: 'POST',
-        headers: {
-          Authorization: `Bearer ${user.token}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          question,
-          program_name: activeProgram?.name || programId,
-        }),
-      })
-      if (!res.ok) {
-        const errData = await res.json().catch(() => ({}))
-        throw new Error(errData.detail || 'Follow-up failed.')
-      }
-      const data = await res.json()
-      addInsightChatMessage(programId, { role: 'ai', content: data.answer || 'No answer returned.' })
-      if (Array.isArray(data.suggested_followups) && data.suggested_followups.length) {
-        setSuggestions(data.suggested_followups.slice(0, 4))
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : 'Follow-up failed.'
-      addInsightChatMessage(programId, { role: 'ai', content: message })
-    } finally {
-      setInsightChatLoading(programId, false)
-    }
-  }, [activeProgram, addInsightChatMessage, chatInput, chatLoading, programId, setChatInput, setInsightChatLoading, user.token])
-
   function handleChipClick(question: string) {
-    chatRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' })
-    void sendFollowup(question)
+    router.push(`/dashboard/${programId}/insights/chat?q=${encodeURIComponent(question)}`)
   }
 
   useEffect(() => {
@@ -493,6 +449,18 @@ export default function AIInsightsPage() {
       return () => window.clearTimeout(t)
     }
   }, [error, handleGenerateInsights, hasAccess, insights, isGeneratingInsights, loadCachedOrGenerate, programId, searchParams, user.token])
+
+  useEffect(() => {
+    // Failsafe for rare idle state where no report renders and generation is inactive.
+    if (!hasAccess || !user.token || !programId || insights || isGeneratingInsights || error || !hasAttempted.current) return
+    if (idleRetryCount.current >= 2) return
+
+    const t = window.setTimeout(() => {
+      idleRetryCount.current += 1
+      void loadCachedOrGenerate()
+    }, 2200)
+    return () => window.clearTimeout(t)
+  }, [error, hasAccess, insights, isGeneratingInsights, loadCachedOrGenerate, programId, user.token])
 
   useEffect(() => {
     if (!isGeneratingInsights) return
@@ -557,6 +525,7 @@ export default function AIInsightsPage() {
   }
 
   if (isGeneratingInsights || (!insights && hasAccess)) {
+    const idleState = !isGeneratingInsights && !stream.active
     return (
       <div className="min-h-screen relative overflow-hidden flex flex-col">
         {headerElement}
@@ -605,6 +574,16 @@ export default function AIInsightsPage() {
               <p className="mt-4 text-[9px] f1-m uppercase tracking-widest text-black/35">
                 Hard timeout: 25s. No more minute-long blank wait.
               </p>
+              {idleState && (
+                <div className="mt-4">
+                  <button
+                    onClick={() => void loadCachedOrGenerate()}
+                    className="btn text-[10px] uppercase tracking-widest"
+                  >
+                    <span className="btn-label">Retry Loading Now</span>
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </main>
@@ -802,7 +781,6 @@ export default function AIInsightsPage() {
                         <button
                           key={chip}
                           onClick={() => handleChipClick(chip)}
-                          disabled={chatLoading}
                           className="px-3 py-2 rounded-sm border border-black/10 bg-black/[0.03] hover:bg-black/[0.06] text-[10px] f1-m uppercase tracking-widest text-black/60 hover:text-black transition-colors disabled:opacity-50"
                         >
                           {chip}
@@ -862,83 +840,36 @@ export default function AIInsightsPage() {
           </div>
         </section>
 
-        <section ref={chatRef} className="plate p-5 md:p-6">
+        <section className="plate p-5 md:p-6">
           <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-5 border-b border-black/10 pb-4">
             <div>
               <p className="text-[10px] f1-m uppercase tracking-widest text-black/40 mb-1">Follow-up Chat</p>
-              <h3 className="text-xl f1-h font-bold text-black/80 uppercase">Ask About Your Data</h3>
+              <h3 className="text-xl f1-h font-bold text-black/80 uppercase">Open Full Chat Workspace</h3>
             </div>
-            <span className="tag">{chatMessages.length} messages</span>
+            <button
+              onClick={() => router.push(`/dashboard/${programId}/insights/chat`)}
+              className="btn-hero text-[10px] uppercase tracking-widest flex items-center justify-center gap-2"
+            >
+              <span className="btn-label">Open Chat</span>
+              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
+              </svg>
+            </button>
           </div>
-
-          <div className="space-y-3 min-h-28">
-            {chatMessages.length === 0 && (
-              <div className="rounded-sm border border-black/10 bg-black/[0.03] p-4 text-xs f1-m text-black/50">
-                Ask why a wallet segment churns, what caused a funnel loss, or which action to ship first.
-              </div>
-            )}
-            {chatMessages.map((message, idx) => (
-              <div key={`${message.role}-${idx}`} className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-                <div className={`max-w-3xl rounded-sm border px-4 py-3 ${message.role === 'user' ? 'bg-black text-white border-black' : 'bg-black/[0.03] border-black/10 text-black/70'}`}>
-                  <p className="text-[9px] f1-m uppercase tracking-widest opacity-60 mb-1">{message.role === 'user' ? 'You' : 'AI'}</p>
-                  <p className="text-sm f1-m leading-relaxed">{message.content}</p>
-                </div>
-              </div>
-            ))}
-            {chatLoading && (
-              <div className="flex items-start gap-3 p-2">
-                <div className="w-6 h-6 rounded-full bg-black/10 flex items-center justify-center">
-                  <span className="text-[10px] f1-m text-black/50">AI</span>
-                </div>
-                <div className="rounded-sm border border-black/10 bg-black/[0.03] px-4 py-3">
-                  <div className="flex gap-1">
-                    <span className="w-2 h-2 bg-black/40 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
-                    <span className="w-2 h-2 bg-black/40 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
-                    <span className="w-2 h-2 bg-black/40 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
-                  </div>
-                </div>
-              </div>
-            )}
+          <div className="rounded-sm border border-black/10 bg-black/[0.03] p-4 text-xs f1-m text-black/55 mb-4">
+            Follow-up now opens in a dedicated page so you can iterate on longer conversations with clearer formatting and context.
           </div>
-
-          <div className="mt-5 flex flex-wrap gap-2">
+          <div className="flex flex-wrap gap-2">
             {visibleSuggestions.map((suggestion) => (
               <button
                 key={suggestion}
                 onClick={() => handleChipClick(suggestion)}
-                disabled={chatLoading}
-                className="px-3 py-2 rounded-sm border border-black/10 bg-black/[0.03] hover:bg-black/[0.06] text-[10px] f1-m uppercase tracking-widest text-black/60 hover:text-black transition-colors disabled:opacity-50"
+                className="px-3 py-2 rounded-sm border border-black/10 bg-black/[0.03] hover:bg-black/[0.06] text-[10px] f1-m uppercase tracking-widest text-black/60 hover:text-black transition-colors"
               >
                 {suggestion}
               </button>
             ))}
           </div>
-
-          <form
-            className="mt-4 flex flex-col sm:flex-row gap-3"
-            onSubmit={(e) => {
-              e.preventDefault()
-              void sendFollowup()
-            }}
-          >
-            <input
-              value={chatInput}
-              onChange={(e) => setChatInput(e.target.value)}
-              placeholder="Type your question..."
-              className="flex-1 px-4 py-3 rounded-sm border border-black/15 bg-white/70 text-sm f1-m text-black/80 placeholder:text-black/35 focus:outline-none focus:border-black/35"
-              disabled={chatLoading}
-            />
-            <button
-              type="submit"
-              disabled={chatLoading || !chatInput.trim()}
-              className="btn-hero text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 disabled:opacity-50"
-            >
-              <span className="btn-label">Send</span>
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-                <path strokeLinecap="round" strokeLinejoin="round" d="M13 7l5 5m0 0l-5 5m5-5H6" />
-              </svg>
-            </button>
-          </form>
         </section>
       </main>
     </div>

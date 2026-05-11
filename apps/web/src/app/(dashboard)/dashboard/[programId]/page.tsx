@@ -24,6 +24,79 @@ type DashboardMetrics = {
   dropOffBreakdown?: Array<{ label: string; value: number }>; drop_off_breakdown?: Array<{ label: string; value: number }>
 }
 
+type TimeRange = '7D' | '30D' | '90D' | 'ALL'
+
+type TxnRecord = {
+  wallet_address?: string
+  walletAddress?: string
+  timestamp?: string
+}
+
+const RANGE_OPTIONS: TimeRange[] = ['7D', '30D', '90D', 'ALL']
+
+function rangeDays(range: TimeRange): number | null {
+  if (range === '7D') return 7
+  if (range === '30D') return 30
+  if (range === '90D') return 90
+  return null
+}
+
+function filterDawByRange(
+  data: Array<{ date: string; daw: number; new_wallets: number; returning_wallets: number }>,
+  range: TimeRange
+) {
+  if (range === 'ALL') return data
+  const days = rangeDays(range) ?? 30
+  return data.slice(-days)
+}
+
+function buildRangeFunnel(transactions: TxnRecord[], range: TimeRange) {
+  const now = Date.now()
+  const days = rangeDays(range)
+  const cutoff = days ? now - days * 24 * 60 * 60 * 1000 : null
+  const countsByWallet = new Map<string, number>()
+
+  for (const txn of transactions) {
+    const wallet = String(txn.walletAddress || txn.wallet_address || '').trim()
+    if (!wallet) continue
+    const tsRaw = txn.timestamp
+    const ts = tsRaw ? new Date(tsRaw).getTime() : NaN
+    if (cutoff && Number.isFinite(ts) && ts < cutoff) continue
+    if (cutoff && !Number.isFinite(ts)) continue
+    countsByWallet.set(wallet, (countsByWallet.get(wallet) || 0) + 1)
+  }
+
+  const stepWallets = [0, 0, 0, 0]
+  countsByWallet.forEach((count) => {
+    if (count >= 1) stepWallets[0] += 1
+    if (count >= 2) stepWallets[1] += 1
+    if (count >= 3) stepWallets[2] += 1
+    if (count >= 5) stepWallets[3] += 1
+  })
+
+  return [
+    { step: 1, label: '1st Transaction', wallet_count: stepWallets[0], drop_off_rate: 0 },
+    {
+      step: 2,
+      label: '2+ Transactions',
+      wallet_count: stepWallets[1],
+      drop_off_rate: stepWallets[0] > 0 ? Math.round(((stepWallets[0] - stepWallets[1]) / stepWallets[0]) * 100) : 0,
+    },
+    {
+      step: 3,
+      label: '3+ Transactions',
+      wallet_count: stepWallets[2],
+      drop_off_rate: stepWallets[1] > 0 ? Math.round(((stepWallets[1] - stepWallets[2]) / stepWallets[1]) * 100) : 0,
+    },
+    {
+      step: 4,
+      label: '5+ Transactions',
+      wallet_count: stepWallets[3],
+      drop_off_rate: stepWallets[2] > 0 ? Math.round(((stepWallets[2] - stepWallets[3]) / stepWallets[2]) * 100) : 0,
+    },
+  ]
+}
+
 function AnimatedNumber({ value }: { value: string | number }) {
   const [d, setD] = useState(0)
   const num = typeof value === 'number' ? value : parseFloat(String(value).replace(/,/g, ''))
@@ -87,6 +160,8 @@ export default function DashboardPage() {
   const [lastSynced, setLastSynced] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [range, setRange] = useState<TimeRange>('30D')
+  const [transactions, setTransactions] = useState<TxnRecord[]>([])
 
   const fetchMetrics = useCallback(async () => {
     if (!user.token || !programId) return
@@ -105,6 +180,28 @@ export default function DashboardPage() {
       return () => window.clearTimeout(t)
     }
   }, [fetchMetrics, isSyncing, metrics, programId, user.token])
+
+  const fetchTransactions = useCallback(async () => {
+    if (!user.token || !programId) return
+    try {
+      const res = await fetch(`${API_BASE}/analytics/transactions/${programId}?limit=1000&offset=0`, {
+        headers: { Authorization: `Bearer ${user.token}` },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (Array.isArray(data)) setTransactions(data as TxnRecord[])
+      }
+    } catch (txnErr) {
+      console.warn('Could not load transactions for range funnel:', txnErr)
+    }
+  }, [programId, user.token])
+
+  useEffect(() => {
+    if (metrics && user.token && programId) {
+      const t = window.setTimeout(() => { void fetchTransactions() }, 0)
+      return () => window.clearTimeout(t)
+    }
+  }, [fetchTransactions, metrics, programId, user.token])
 
   async function handleSync(force = false) {
     if (!user.token || !programId) return
@@ -159,18 +256,18 @@ export default function DashboardPage() {
     wallet_count: Number(r.walletCount ?? r.wallet_count ?? 0),
     retention_rate: Number(r.retentionRate ?? r.retention_rate ?? 0),
   }))
-  const activityHeatmap = rawHeatmap.map((r: any) => ({
+  const activityHeatmap = rawHeatmap.map((r) => ({
     hour: Number(r.hour ?? 0),
     day: Number(r.day ?? 0),
     count: Number(r.count ?? 0),
   }))
-  const whales = rawWhales.map((w: any) => ({
+  const whales = rawWhales.map((w) => ({
     address: String(w.address ?? ''),
     txns: Number(w.txns ?? 0),
     volume_sol: Number(w.volumeSol ?? w.volume_sol ?? 0),
     share_pct: Number(w.sharePct ?? w.share_pct ?? 0),
   }))
-  const dropOffBreakdown = rawDropOff.map((d: any) => ({
+  const dropOffBreakdown = rawDropOff.map((d) => ({
     label: String(d.label ?? ''),
     value: Number(d.value ?? 0),
   }))
@@ -185,6 +282,12 @@ export default function DashboardPage() {
 
   const healthScore = metrics ? computeHealth(summary, rawFunnel) : 0
   const signals = metrics ? buildSignals(summary, rawFunnel, d7, d30) : []
+  const filteredDawTrend = filterDawByRange(dawTrend, range)
+  const rangeAvgDaw = filteredDawTrend.length > 0
+    ? Math.round(filteredDawTrend.reduce((sum, d) => sum + d.daw, 0) / filteredDawTrend.length)
+    : avgDaw
+  const rangeFunnel = transactions.length > 0 ? buildRangeFunnel(transactions, range) : funnel
+  const rangeLabel = range
 
   const shortAddr = programId.length > 12 ? `${programId.slice(0, 6)}…${programId.slice(-4)}` : programId
   const statusColor = !metrics ? '#999' : healthScore >= 65 ? '#16a34a' : healthScore >= 35 ? '#d97706' : '#dc2626'
@@ -233,6 +336,19 @@ export default function DashboardPage() {
         </div>
 
         <div className="flex items-center gap-3">
+          <div className="hidden md:flex items-center rounded-sm border border-black/20 overflow-hidden bg-white/40">
+            {RANGE_OPTIONS.map((opt) => (
+              <button
+                key={opt}
+                onClick={() => setRange(opt)}
+                className={`px-2.5 py-1 text-[9px] f1-m uppercase tracking-widest border-r border-black/15 last:border-r-0 transition-colors ${
+                  range === opt ? 'bg-black text-white' : 'text-black/60 hover:text-black'
+                }`}
+              >
+                {opt}
+              </button>
+            ))}
+          </div>
           {lastSynced && (
             <span className="hidden sm:flex items-center gap-1.5 text-[10px] f1-m uppercase tracking-widest text-black/50">
               <span className="status-dot on" />Sync {lastSynced}
@@ -291,7 +407,7 @@ export default function DashboardPage() {
                 <MetricCard label="Total Wallets" value={<AnimatedNumber value={totalWallets} />} subtext={`${totalTxns.toLocaleString()} TXNs`} />
               </div>
               <div className="animate-scale-in stagger-1">
-                <MetricCard label="Avg DAW / 30D" value={<AnimatedNumber value={avgDaw} />} subtext="Daily active wallets" trend={avgDaw > 50 ? 'up' : 'down'} />
+                <MetricCard label={`Avg DAW / ${rangeLabel}`} value={<AnimatedNumber value={rangeAvgDaw} />} subtext="Daily active wallets" trend={rangeAvgDaw > 50 ? 'up' : 'down'} />
               </div>
               <div className="animate-scale-in stagger-2">
                 <MetricCard label="Est. SOL Volume" value={volSol > 0 ? `${volSol.toFixed(0)} ◎` : '—'} subtext={volSol > 0 ? 'On-chain total' : 'No volume data'} trend={volSol > 0 ? 'neutral' : undefined} />
@@ -306,7 +422,7 @@ export default function DashboardPage() {
 
             {/* ── Acquisition & Activity ── */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-8">
-              <div className="animate-scale-in stagger-1"><DAWChart data={dawTrend} /></div>
+              <div className="animate-scale-in stagger-1"><DAWChart data={filteredDawTrend} rangeLabel={rangeLabel} /></div>
               <div className="animate-scale-in stagger-2">
                 <WalletSegments totalWallets={totalWallets} d7Retention={d7} d30Retention={d30} />
               </div>
@@ -314,7 +430,7 @@ export default function DashboardPage() {
 
             {/* ── Funnel & Conversion ── */}
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-5 mb-8">
-              <div className="animate-scale-in stagger-1"><FunnelChart data={funnel} /></div>
+              <div className="animate-scale-in stagger-1"><FunnelChart data={rangeFunnel} rangeLabel={rangeLabel} /></div>
               <div className="animate-scale-in stagger-2"><DropOffBreakdown data={dropOffBreakdown} /></div>
             </div>
 
@@ -356,7 +472,7 @@ export default function DashboardPage() {
                     </div>
                     <h2 className="text-2xl f1-h font-bold text-white uppercase tracking-tight mb-2">Locate Structural Defects</h2>
                     <p className="text-gray-400 text-[10px] f1-m uppercase tracking-widest leading-relaxed">
-                      LangGraph identifies the root cause of every signal above. Not just what's wrong — exactly what to change.
+                      LangGraph identifies the root cause of every signal above. Not just what is wrong — exactly what to change.
                     </p>
                   </div>
                   <div className="shrink-0 flex flex-col items-center gap-2">
