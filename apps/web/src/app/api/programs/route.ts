@@ -57,22 +57,24 @@ async function verifyAuth(request: NextRequest): Promise<{ wallet: string; plan:
  */
 async function resolveWalletToUserId(supabase: ReturnType<typeof createClient>, wallet: string): Promise<string | null> {
   // 1. Check linked wallets
-  const { data: linked } = await supabase
+  const linkedRes = await supabase
     .from('linked_wallets')
     .select('user_id')
     .eq('wallet_pubkey', wallet)
-    .single()
-  
-  if (linked && linked.user_id) return linked.user_id
+    .maybeSingle()
+
+  const linked = linkedRes.data as { user_id: string } | null
+  if (linked?.user_id) return linked.user_id
 
   // 2. Check primary users
-  const { data: primary } = await supabase
+  const primaryRes = await supabase
     .from('users')
     .select('id')
     .eq('wallet_pubkey', wallet)
-    .single()
-  
-  if (primary && primary.id) return primary.id
+    .maybeSingle()
+
+  const primary = primaryRes.data as { id: string } | null
+  if (primary?.id) return primary.id
 
   return null
 }
@@ -162,13 +164,13 @@ export async function POST(req: NextRequest) {
           { onConflict: 'wallet_pubkey' }
         )
         .select('id')
-        .single()
+        .maybeSingle()
 
       if (userError || !userData) {
         console.error('Failed to upsert user:', userError)
         return NextResponse.json({ error: 'Failed to create user record' }, { status: 500 })
       }
-      userId = userData.id as string
+      userId = (userData as unknown as { id: string }).id
     }
 
     // Upsert program row (idempotent — safe to call multiple times)
@@ -184,9 +186,9 @@ export async function POST(req: NextRequest) {
         { onConflict: 'user_id,program_address' }
       )
       .select('*')
-      .single()
+      .maybeSingle()
 
-    if (progError) {
+    if (progError || !program) {
       console.error('Failed to register program:', progError)
       return NextResponse.json({ error: 'Failed to register program' }, { status: 500 })
     }

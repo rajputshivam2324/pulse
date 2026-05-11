@@ -21,6 +21,14 @@ const CustomTooltip = ({ active, payload, label }: { active?: boolean; payload?:
   )
 }
 
+export function healthGrade(score: number): 'A' | 'B' | 'C' | 'D' | 'F' {
+  if (score >= 80) return 'A'
+  if (score >= 65) return 'B'
+  if (score >= 50) return 'C'
+  if (score >= 35) return 'D'
+  return 'F'
+}
+
 /* ── MetricCard ── */
 export function MetricCard({ label, value, subtext, trend }: {
   label: string; value: React.ReactNode; subtext?: string; trend?: 'up' | 'down' | 'neutral'
@@ -43,7 +51,7 @@ export function MetricCard({ label, value, subtext, trend }: {
 
 /* ── Health Score ── */
 export function HealthScore({ score }: { score: number }) {
-  const grade = score >= 80 ? 'A' : score >= 65 ? 'B' : score >= 50 ? 'C' : score >= 35 ? 'D' : 'F'
+  const grade = healthGrade(score)
   const color = score >= 65 ? '#16a34a' : score >= 35 ? '#d97706' : '#dc2626'
   const segments = [
     { name: 'score', value: score, fill: color },
@@ -72,6 +80,9 @@ export function HealthScore({ score }: { score: number }) {
 
 /* ── DAW Chart ── */
 export function DAWChart({ data }: { data: Array<{ date: string; daw: number; new_wallets: number; returning_wallets: number }> }) {
+  const latest = data[data.length - 1]
+  const returningShare = latest && latest.daw > 0 ? Math.round((latest.returning_wallets / latest.daw) * 100) : 0
+
   return (
     <div className="plate p-5">
       <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
@@ -81,24 +92,30 @@ export function DAWChart({ data }: { data: Array<{ date: string; daw: number; ne
           <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-[#999]" />Return</span>
         </div>
       </div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="rounded-sm border border-black/10 bg-black/[0.03] p-2">
+          <div className="text-[8px] f1-m uppercase tracking-widest text-black/35">Latest DAW</div>
+          <div className="f1-h text-lg font-bold text-black/80">{latest?.daw?.toLocaleString() || 0}</div>
+        </div>
+        <div className="rounded-sm border border-black/10 bg-black/[0.03] p-2">
+          <div className="text-[8px] f1-m uppercase tracking-widest text-black/35">Returning</div>
+          <div className="f1-h text-lg font-bold text-black/80">{returningShare}%</div>
+        </div>
+        <div className="rounded-sm border border-black/10 bg-black/[0.03] p-2">
+          <div className="text-[8px] f1-m uppercase tracking-widest text-black/35">Days</div>
+          <div className="f1-h text-lg font-bold text-black/80">{data.length}</div>
+        </div>
+      </div>
       <div style={{ height: 240 }} className="bg-black/5 rounded-sm p-2 border border-black/10">
-        <ResponsiveContainer width="100%" height="100%">
-          <AreaChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-            <defs>
-              <linearGradient id="gNew" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#555" stopOpacity={0.4} /><stop offset="95%" stopColor="#555" stopOpacity={0} />
-              </linearGradient>
-              <linearGradient id="gRet" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#999" stopOpacity={0.4} /><stop offset="95%" stopColor="#999" stopOpacity={0} />
-              </linearGradient>
-            </defs>
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+          <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
             <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.12)" />
             <XAxis dataKey="date" tick={{ fill: '#444', fontSize: 9, fontFamily: 'monospace' }} tickLine={false} axisLine={{ stroke: 'rgba(0,0,0,0.2)' }} />
             <YAxis tick={{ fill: '#444', fontSize: 9, fontFamily: 'monospace' }} tickLine={false} axisLine={false} />
             <Tooltip content={<CustomTooltip />} cursor={{ stroke: 'rgba(0,0,0,0.2)', strokeDasharray: '4 4' }} />
-            <Area type="step" dataKey="new_wallets" name="New" stackId="1" stroke="#333" fill="url(#gNew)" strokeWidth={2} />
-            <Area type="step" dataKey="returning_wallets" name="Return" stackId="1" stroke="#777" fill="url(#gRet)" strokeWidth={2} />
-          </AreaChart>
+            <Bar dataKey="new_wallets" name="New" stackId="a" fill="#1f2937" radius={[2, 2, 0, 0]} />
+            <Bar dataKey="returning_wallets" name="Return" stackId="a" fill="#9ca3af" radius={[2, 2, 0, 0]} />
+          </BarChart>
         </ResponsiveContainer>
       </div>
     </div>
@@ -107,7 +124,7 @@ export function DAWChart({ data }: { data: Array<{ date: string; daw: number; ne
 
 /* ── Funnel Chart ── */
 export function FunnelChart({ data }: { data: Array<{ step: number; label: string; wallet_count: number; drop_off_rate: number }> }) {
-  const colors = ['#1a1a1a', '#333', '#555', '#777', '#999']
+  const firstCount = data[0]?.wallet_count || 1
   return (
     <div className="plate p-5">
       <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
@@ -120,18 +137,38 @@ export function FunnelChart({ data }: { data: Array<{ step: number; label: strin
           ))}
         </div>
       </div>
-      <div style={{ height: 240 }} className="bg-black/5 rounded-sm p-2 border border-black/10">
-        <ResponsiveContainer width="100%" height="100%">
-          <BarChart data={data} margin={{ top: 5, right: 5, bottom: 5, left: 0 }}>
-            <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.12)" vertical={false} />
-            <XAxis dataKey="label" tick={{ fill: '#444', fontSize: 9, fontFamily: 'monospace' }} tickLine={false} axisLine={{ stroke: 'rgba(0,0,0,0.2)' }} />
-            <YAxis tick={{ fill: '#444', fontSize: 9, fontFamily: 'monospace' }} tickLine={false} axisLine={false} />
-            <Tooltip content={<CustomTooltip />} cursor={{ fill: 'rgba(0,0,0,0.04)' }} />
-            <Bar dataKey="wallet_count" name="Wallets" radius={[2, 2, 0, 0]}>
-              {data.map((_, i) => <Cell key={i} fill={colors[i % colors.length]} />)}
-            </Bar>
-          </BarChart>
-        </ResponsiveContainer>
+      <div className="bg-black/5 rounded-sm p-3 border border-black/10 space-y-3">
+        {data.map((step) => {
+          const pct = Math.max(3, Math.round((step.wallet_count / firstCount) * 100))
+          const hot = step.drop_off_rate >= 60
+          return (
+            <div key={step.step}>
+              <div className="flex items-center justify-between mb-1.5">
+                <div className="flex items-center gap-2 min-w-0">
+                  <span className="w-6 h-6 rounded-sm bg-black/80 text-white text-[10px] f1-h font-bold flex items-center justify-center">{step.step}</span>
+                  <span className="text-[10px] f1-m uppercase tracking-widest text-black/60 truncate">{step.label}</span>
+                </div>
+                <div className="text-right shrink-0">
+                  <div className="text-xs f1-h font-bold text-black/80">{step.wallet_count.toLocaleString()}</div>
+                  {step.step > 1 && (
+                    <div className="text-[9px] f1-m font-bold" style={{ color: hot ? '#dc2626' : '#d97706' }}>
+                      -{step.drop_off_rate}%
+                    </div>
+                  )}
+                </div>
+              </div>
+              <div className="h-8 rounded-sm bg-black/[0.06] border border-black/10 overflow-hidden">
+                <div
+                  className="h-full rounded-sm transition-all duration-700"
+                  style={{
+                    width: `${pct}%`,
+                    background: hot ? '#dc2626' : step.step === 1 ? '#111827' : '#4b5563',
+                  }}
+                />
+              </div>
+            </div>
+          )
+        })}
       </div>
     </div>
   )
@@ -152,7 +189,7 @@ export function DropOffBreakdown({ data }: { data?: Array<{ label: string; value
         </div>
       ) : (
         <div style={{ height: 200 }} className="relative flex items-center justify-center">
-          <ResponsiveContainer width="100%" height="100%">
+          <ResponsiveContainer width="100%" height="100%" minWidth={0}>
             <PieChart>
               <Pie data={data} cx="50%" cy="50%" innerRadius={55} outerRadius={80} dataKey="value" stroke="none">
                 {data.map((_, i) => <Cell key={i} fill={colors[i % colors.length]} />)}
@@ -177,7 +214,7 @@ export function DropOffBreakdown({ data }: { data?: Array<{ label: string; value
 }
 
 /* ── Wallet Segments ── */
-export function WalletSegments({ totalWallets, d7Retention, d30Retention }: { totalWallets: number; d7Retention: number; d30Retention: number }) {
+export function WalletSegments({ totalWallets, d7Retention }: { totalWallets: number; d7Retention: number; d30Retention: number }) {
   const oneAndDone = Math.round(totalWallets * (1 - d7Retention / 100) * 0.72)
   const casual = Math.round(totalWallets * 0.14)
   const regular = Math.round(totalWallets * 0.18)
@@ -440,6 +477,212 @@ export function SignalFeed({ signals, onAskAI }: { signals: Signal[]; onAskAI: (
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+/* ── Retention By Type Table (for Insights page) ── */
+export interface TypeRetentionRow {
+  type: string
+  total_wallets: number
+  returned_wallets: number
+  return_rate: number
+  d30_return_rate?: number
+  avg_txns?: number
+  churn_rate?: number
+}
+
+function retentionCellColor(rate: number): { bg: string; text: string } {
+  if (rate >= 30) return { bg: 'rgba(22,163,74,0.15)', text: '#16a34a' }
+  if (rate >= 10) return { bg: 'rgba(217,119,6,0.15)', text: '#d97706' }
+  return { bg: 'rgba(220,38,38,0.12)', text: '#dc2626' }
+}
+
+const BENCHMARK_D7 = 25 // Solana DeFi average
+const BENCHMARK_D30 = 10
+
+export function RetentionByTypeTable({ data }: { data: TypeRetentionRow[] }) {
+  if (!data || data.length === 0) {
+    return (
+      <div className="plate p-5">
+        <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+          <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Action Type Comparison</h3>
+        </div>
+        <div className="h-24 flex items-center justify-center text-[10px] f1-m text-black/30 uppercase tracking-widest">
+          No per-type data available
+        </div>
+      </div>
+    )
+  }
+
+  const sorted = [...data].sort((a, b) => b.return_rate - a.return_rate)
+
+  return (
+    <div className="plate p-5">
+      <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Action Type Comparison</h3>
+        <span className="tag">vs DeFi avg</span>
+      </div>
+      <div className="overflow-x-auto bg-black/5 rounded-sm border border-black/10">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-black/10">
+              {['Action Type', 'Users', 'D7 Ret.', 'D30 Ret.', 'Avg Txns', 'vs Bench'].map((h) => (
+                <th key={h} className="text-[9px] f1-m uppercase tracking-widest text-black/40 px-3 py-2.5 text-left font-bold">{h}</th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((row) => {
+              const cell = retentionCellColor(row.return_rate)
+              const d30 = row.d30_return_rate ?? Math.max(0, Math.round(row.return_rate * 0.4))
+              const d30Cell = retentionCellColor(d30)
+              const delta = row.return_rate - BENCHMARK_D7
+              const deltaColor = delta >= 0 ? '#16a34a' : '#dc2626'
+              return (
+                <tr key={row.type} className="border-b border-black/5 hover:bg-black/[0.03] transition-colors">
+                  <td className="px-3 py-2.5">
+                    <span className="f1-m text-[11px] font-bold text-black/70 uppercase">{row.type}</span>
+                  </td>
+                  <td className="px-3 py-2.5 text-[11px] f1-m text-black/60 font-mono">{row.total_wallets}</td>
+                  <td className="px-3 py-2.5">
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-sm text-[10px] font-bold f1-m"
+                      style={{ background: cell.bg, color: cell.text }}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: cell.text }} />
+                      {row.return_rate}%
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span
+                      className="inline-flex items-center gap-1.5 px-2 py-1 rounded-sm text-[10px] font-bold f1-m"
+                      style={{ background: d30Cell.bg, color: d30Cell.text }}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full" style={{ background: d30Cell.text }} />
+                      {d30}%
+                    </span>
+                  </td>
+                  <td className="px-3 py-2.5 text-[11px] f1-m text-black/60 font-mono">
+                    {row.avg_txns?.toFixed(1) ?? '—'}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    <span className="text-[10px] font-bold f1-m" style={{ color: deltaColor }}>
+                      {delta >= 0 ? '+' : ''}{delta}% / {d30 - BENCHMARK_D30 >= 0 ? '+' : ''}{d30 - BENCHMARK_D30}%
+                    </span>
+                  </td>
+                </tr>
+              )
+            })}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
+}
+
+/* ── Retention By Type Bar (mini chart for anomaly evidence zones) ── */
+export function RetentionByTypeBar({ data }: { data: TypeRetentionRow[] }) {
+  if (!data || data.length === 0) return null
+  const sorted = [...data].sort((a, b) => b.return_rate - a.return_rate).slice(0, 6)
+  const maxRate = Math.max(...sorted.map(r => r.return_rate), 1)
+
+  return (
+    <div className="bg-black/[0.03] rounded-sm border border-black/10 p-3">
+      <div className="text-[9px] f1-m uppercase tracking-widest text-black/40 font-bold mb-3">Retention by First Action</div>
+      <div className="space-y-1.5">
+        {sorted.map((row) => {
+          const cell = retentionCellColor(row.return_rate)
+          return (
+            <div key={row.type} className="flex items-center gap-2">
+              <span className="text-[9px] f1-m text-black/50 uppercase w-24 truncate shrink-0">{row.type}</span>
+              <div className="flex-1 h-4 bg-black/[0.06] rounded-sm overflow-hidden">
+                <div
+                  className="h-full rounded-sm transition-all duration-700"
+                  style={{ width: `${(row.return_rate / Math.max(maxRate, 100)) * 100}%`, background: cell.text }}
+                />
+              </div>
+              <span className="text-[9px] f1-m font-bold w-8 text-right" style={{ color: cell.text }}>{row.return_rate}%</span>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
+}
+
+/* ── Mini Funnel (for anomaly evidence zones) ── */
+export function MiniFunnel({ data }: { data: Array<{ step: number; label: string; wallet_count: number; drop_off_rate: number }> }) {
+  if (!data || data.length === 0) return null
+  const maxCount = Math.max(...data.map(d => d.wallet_count), 1)
+
+  return (
+    <div className="bg-black/[0.03] rounded-sm border border-black/10 p-3">
+      <div className="text-[9px] f1-m uppercase tracking-widest text-black/40 font-bold mb-3">Transaction Funnel</div>
+      <div className="space-y-1.5">
+        {data.map((step) => (
+          <div key={step.step} className="flex items-center gap-2">
+            <span className="text-[9px] f1-m text-black/50 w-16 truncate shrink-0">Step {step.step}</span>
+            <div className="flex-1 h-4 bg-black/[0.06] rounded-sm overflow-hidden">
+              <div
+                className="h-full rounded-sm transition-all duration-700 bg-black/30"
+                style={{ width: `${(step.wallet_count / maxCount) * 100}%` }}
+              />
+            </div>
+            <span className="text-[9px] f1-m text-black/60 w-12 text-right">{step.wallet_count}</span>
+            {step.drop_off_rate > 0 && (
+              <span className="text-[8px] f1-m text-red-600 font-bold w-10 text-right">-{step.drop_off_rate}%</span>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+/* ── Mini DAW Trend (for anomaly evidence zones) ── */
+export function MiniDAWTrend({ data }: { data: Array<{ date: string; daw: number; new_wallets: number; returning_wallets: number }> }) {
+  if (!data || data.length === 0) return null
+  const latest = data[data.length - 1]
+  const first = data[0]
+  const delta = (latest?.daw || 0) - (first?.daw || 0)
+
+  return (
+    <div className="bg-black/[0.03] rounded-sm border border-black/10 p-3">
+      <div className="flex items-center justify-between mb-3">
+        <div className="text-[9px] f1-m uppercase tracking-widest text-black/40 font-bold">DAW Trend</div>
+        <span className="text-[9px] f1-m font-bold" style={{ color: delta >= 0 ? '#16a34a' : '#dc2626' }}>
+          {delta >= 0 ? '+' : ''}{delta} wallets
+        </span>
+      </div>
+      <div className="h-24 bg-black/[0.03] rounded-sm">
+        <ResponsiveContainer width="100%" height="100%" minWidth={0}>
+          <AreaChart data={data} margin={{ top: 8, right: 4, left: 4, bottom: 0 }}>
+            <defs>
+              <linearGradient id="miniDaw" x1="0" y1="0" x2="0" y2="1">
+                <stop offset="5%" stopColor="#333" stopOpacity={0.25} />
+                <stop offset="95%" stopColor="#333" stopOpacity={0} />
+              </linearGradient>
+            </defs>
+            <Area type="monotone" dataKey="daw" stroke="#333" fill="url(#miniDaw)" strokeWidth={2} dot={false} />
+          </AreaChart>
+        </ResponsiveContainer>
+      </div>
+    </div>
+  )
+}
+
+/* ── Impact Card (Quick Wins) ── */
+export function ImpactCard({ metric, description, effort }: {
+  metric: string
+  description: string
+  effort: string
+}) {
+  return (
+    <div className="plate p-5 flex flex-col items-center text-center group hover:-translate-y-0.5 transition-all">
+      <div className="f1-h text-3xl font-bold text-black/80 mb-2">{metric}</div>
+      <p className="text-[10px] f1-m text-black/60 uppercase tracking-widest leading-relaxed mb-4 flex-1">{description}</p>
+      <span className="tag text-[8px]">Effort: {effort}</span>
     </div>
   )
 }

@@ -8,6 +8,7 @@ import json
 import logging
 import os
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
+from langgraph.config import get_stream_writer
 from .prompts import (
     ANOMALY_DETECTION_PROMPT,
     INSIGHT_GENERATION_PROMPT,
@@ -69,11 +70,16 @@ async def anomaly_detector_node(state: InsightPipelineState) -> dict:
     Node 1: Scan all metrics and identify anomalies.
     Output: list of anomaly dicts ranked by severity.
     """
+    writer = get_stream_writer()
+    writer({"status": "Scanning metrics for anomalies..."})
+
     chain = ANOMALY_DETECTION_PROMPT | _get_model()
     response = await chain.ainvoke(
-        {"metrics_json": json.dumps(state["metrics_payload"], indent=2)}
+        # Keep payload compact for latency + token usage.
+        {"metrics_json": json.dumps(state["metrics_payload"], separators=(",", ":"), ensure_ascii=False)}
     )
     result = safe_parse_json(response.content)
+    writer({"status": f"Found {len(result.get('anomalies', []))} anomalies"})
     trace = list(state.get("execution_trace", []))
     trace.append(
         f"anomaly_detector: found {len(result.get('anomalies', []))} anomalies"
@@ -90,11 +96,14 @@ async def anomaly_ranker_node(state: InsightPipelineState) -> dict:
     Node 2: Sort anomalies by severity for prioritized insight generation.
     Pure logic node — no LLM call needed.
     """
+    writer = get_stream_writer()
+    writer({"status": "Ranking anomalies by severity..."})
     severity_order = {"critical": 0, "high": 1, "medium": 2, "low": 3}
     ranked = sorted(
         state["anomalies"],
         key=lambda x: severity_order.get(x.get("severity", "low"), 3),
     )
+    writer({"status": f"Ranked {len(ranked)} anomalies"})
     trace = list(state.get("execution_trace", []))
     trace.append(f"anomaly_ranker: ranked {len(ranked)} anomalies")
 
@@ -106,10 +115,13 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
     Node 3: For each top anomaly, generate a structured insight.
     Run sequentially for top 4 anomalies only — avoid over-generation.
     """
+    writer = get_stream_writer()
+    writer({"status": "Generating insight cards..."})
+
     top_anomalies = state["ranked_anomalies"][:4]
     program_name = state.get("program_name") or "this Solana program"
     metrics_summary = json.dumps(
-        state["metrics_payload"].get("summary", {}), indent=2
+        state["metrics_payload"].get("summary", {}), separators=(",", ":"), ensure_ascii=False
     )
 
     insights = []
@@ -117,21 +129,25 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
 
     for i, anomaly in enumerate(top_anomalies):
         try:
+            writer({"status": f"Drafting insight {i + 1}/{len(top_anomalies)}..."})
             response = await chain.ainvoke(
                 {
                     "program_name": program_name,
-                    "anomaly_json": json.dumps(anomaly, indent=2),
+                    "anomaly_json": json.dumps(anomaly, separators=(",", ":"), ensure_ascii=False),
                     "metrics_summary_json": metrics_summary,
                     "index": i + 1,
                 }
             )
             insight = safe_parse_json(response.content)
             insights.append(insight)
+            # Stream the card immediately so the UI can render progressively.
+            writer({"insight": insight, "index": i + 1, "total": len(top_anomalies)})
         except Exception as e:
             # Log but don't fail the pipeline
             logger.warning("Insight generation failed for anomaly", extra={"index": i, "error": str(e)})
             continue
 
+    writer({"status": f"Generated {len(insights)} insight cards"})
     trace = list(state.get("execution_trace", []))
     trace.append(f"insight_generator: generated {len(insights)} insights")
 
@@ -143,6 +159,8 @@ async def retention_analyst_node(state: InsightPipelineState) -> dict:
     Node 4: Deep-dive retention diagnosis — separate node for focused analysis.
     This produces the most specific insight in the output.
     """
+    writer = get_stream_writer()
+    writer({"status": "Computing retention diagnosis..."})
     chain = RETENTION_DIAGNOSIS_PROMPT | _get_model()
     try:
         response = await chain.ainvoke(
@@ -150,14 +168,14 @@ async def retention_analyst_node(state: InsightPipelineState) -> dict:
                 "program_name": state.get("program_name") or "this program",
                 "retention_cohorts_json": json.dumps(
                     state["metrics_payload"].get("retention_cohorts", [])[:20],
-                    indent=2,
+                    separators=(",", ":"), ensure_ascii=False,
                 ),
                 "per_type_retention_json": json.dumps(
                     state["metrics_payload"].get("per_type_retention", []),
-                    indent=2,
+                    separators=(",", ":"), ensure_ascii=False,
                 ),
                 "summary_json": json.dumps(
-                    state["metrics_payload"].get("summary", {}), indent=2
+                    state["metrics_payload"].get("summary", {}), separators=(",", ":"), ensure_ascii=False
                 ),
             }
         )
@@ -172,6 +190,7 @@ async def retention_analyst_node(state: InsightPipelineState) -> dict:
             "retention_grade": "N/A",
         }
 
+    writer({"status": "Retention diagnosis ready"})
     trace = list(state.get("execution_trace", []))
     trace.append("retention_analyst: completed retention diagnosis")
 
@@ -183,6 +202,8 @@ async def health_scorer_node(state: InsightPipelineState) -> dict:
     Node 5: Compute a 0-100 product health score from all metrics.
     Pure logic — weighted scoring, no LLM call.
     """
+    writer = get_stream_writer()
+    writer({"status": "Computing health score..."})
     summary = state["metrics_payload"].get("summary", {})
     score = 50  # baseline
 
@@ -226,6 +247,7 @@ async def health_scorer_node(state: InsightPipelineState) -> dict:
     score -= critical_count * 8
 
     health_score = max(0, min(100, score))
+    writer({"status": f"Health score computed: {health_score}/100", "health_score": health_score})
     trace = list(state.get("execution_trace", []))
     trace.append(f"health_scorer: score = {health_score}")
 
@@ -236,14 +258,16 @@ async def quick_win_extractor_node(state: InsightPipelineState) -> dict:
     """
     Node 6: Extract 3 quick wins from the generated insights.
     """
+    writer = get_stream_writer()
+    writer({"status": "Extracting quick wins..."})
     chain = QUICK_WINS_PROMPT | _get_model()
     try:
         response = await chain.ainvoke(
             {
                 "program_name": state.get("program_name") or "this program",
-                "insights_json": json.dumps(state["raw_insights"], indent=2),
+                "insights_json": json.dumps(state["raw_insights"], separators=(",", ":"), ensure_ascii=False),
                 "summary_json": json.dumps(
-                    state["metrics_payload"].get("summary", {}), indent=2
+                    state["metrics_payload"].get("summary", {}), separators=(",", ":"), ensure_ascii=False
                 ),
             }
         )
@@ -252,6 +276,7 @@ async def quick_win_extractor_node(state: InsightPipelineState) -> dict:
         logger.warning("Quick win extraction failed", extra={"error": str(e)})
         result = {"quick_wins": ["Review your highest churn transaction type"]}
 
+    writer({"status": "Quick wins ready", "quick_wins": result.get("quick_wins", [])})
     trace = list(state.get("execution_trace", []))
     trace.append("quick_win_extractor: extracted quick wins")
 
@@ -265,6 +290,8 @@ async def output_assembler_node(state: InsightPipelineState) -> dict:
     """
     Node 7: Assemble final output — generate headline, pick top insights, structure response.
     """
+    writer = get_stream_writer()
+    writer({"status": "Assembling final report..."})
     top_insight = state["raw_insights"][0] if state["raw_insights"] else {}
 
     try:
@@ -272,7 +299,7 @@ async def output_assembler_node(state: InsightPipelineState) -> dict:
         headline_response = await chain.ainvoke(
             {
                 "program_name": state.get("program_name") or "your program",
-                "top_insight_json": json.dumps(top_insight, indent=2),
+                "top_insight_json": json.dumps(top_insight, separators=(",", ":"), ensure_ascii=False),
                 "health_score": state.get("health_score", 50),
             }
         )
@@ -281,6 +308,7 @@ async def output_assembler_node(state: InsightPipelineState) -> dict:
         logger.warning("Headline generation failed", extra={"error": str(e)})
         headline = f"Product Health Score: {state.get('health_score', 50)}/100"
 
+    writer({"status": "Report ready", "headline": headline})
     # Pick biggest problem from highest severity insight
     biggest_problem = top_insight.get(
         "finding", "No critical issues detected"

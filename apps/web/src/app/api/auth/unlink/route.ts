@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { getSupabase } from '@/lib/supabase' // I'll use the local Supabase client like in programs route
 import { createClient } from '@supabase/supabase-js'
 import * as jose from 'jose'
+import type { SupabaseClient } from '@supabase/supabase-js'
 
 function getJwtSecret() {
   const secret = process.env.JWT_SECRET
@@ -18,7 +18,7 @@ function getSupabaseClient() {
   return createClient(url, key)
 }
 
-async function verifyAuthAndGetUserId(request: NextRequest, supabase: ReturnType<typeof createClient>): Promise<string | null> {
+async function verifyAuthAndGetUserId(request: NextRequest, supabase: SupabaseClient): Promise<string | null> {
   const authHeader = request.headers.get('authorization')
   if (!authHeader?.startsWith('Bearer ')) return null
 
@@ -29,20 +29,22 @@ async function verifyAuthAndGetUserId(request: NextRequest, supabase: ReturnType
     if (!wallet) return null
 
     // 1. Check linked wallets
-    const { data: linked } = await supabase
+    const linkedRes = await supabase
       .from('linked_wallets')
       .select('user_id')
       .eq('wallet_pubkey', wallet)
-      .single()
-    if (linked && linked.user_id) return linked.user_id
+      .maybeSingle()
+    const linked = linkedRes.data as { user_id: string } | null
+    if (linked?.user_id) return linked.user_id
 
     // 2. Check primary users
-    const { data: primary } = await supabase
+    const primaryRes = await supabase
       .from('users')
       .select('id')
       .eq('wallet_pubkey', wallet)
-      .single()
-    if (primary && primary.id) return primary.id
+      .maybeSingle()
+    const primary = primaryRes.data as { id: string } | null
+    if (primary?.id) return primary.id
 
     return null
   } catch (err) {

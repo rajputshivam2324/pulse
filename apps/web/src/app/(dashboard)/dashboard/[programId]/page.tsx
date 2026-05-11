@@ -361,7 +361,7 @@ export default function DashboardPage() {
                   </div>
                   <div className="shrink-0 flex flex-col items-center gap-2">
                     {canAccess(user.plan, 'ai_insights') ? (
-                      <button onClick={() => router.push(`/dashboard/${programId}/insights`)} className="btn-hero">
+                      <button onClick={() => router.push(`/dashboard/${programId}/insights?auto=1`)} className="btn-hero">
                         <span className="btn-label">Execute AI Insights</span>
                       </button>
                     ) : (

@@ -32,13 +32,27 @@ interface MetricsState {
 }
 
 interface InsightsState {
-  headline: string | null
-  biggestProblem: string | null
-  healthScore: number
+  headline?: string | null
+  biggestProblem?: string | null
+  biggest_problem?: string | null
+  healthScore?: number
+  health_score?: number
   insights: Record<string, unknown>[]
-  retentionDiagnosis: Record<string, unknown> | null
-  quickWins: string[]
-  executionTrace: string[]
+  retentionDiagnosis?: Record<string, unknown> | null
+  retention_diagnosis?: Record<string, unknown> | null
+  quickWins?: string[]
+  quick_wins?: string[]
+  executionTrace?: string[]
+  execution_trace?: string[]
+  suggestedQuestions?: string[]
+  suggested_questions?: string[]
+  generatedAt?: string
+  generated_at?: string
+}
+
+export interface InsightChatMessage {
+  role: 'user' | 'ai'
+  content: string
 }
 
 interface PulseStore {
@@ -71,6 +85,14 @@ interface PulseStore {
   getInsights: (programId: string) => InsightsState | null
   setInsights: (programId: string, insights: InsightsState | null) => void
   clearInsights: (programId: string) => void
+
+  // Follow-up chat — keyed by programId
+  insightChatByProgram: Record<string, InsightChatMessage[]>
+  insightChatLoadingByProgram: Record<string, boolean>
+  getInsightChat: (programId: string) => InsightChatMessage[]
+  setInsightChat: (programId: string, messages: InsightChatMessage[]) => void
+  addInsightChatMessage: (programId: string, message: InsightChatMessage) => void
+  setInsightChatLoading: (programId: string, loading: boolean) => void
 
   // Loading states — keyed by programId
   isSyncing: boolean
@@ -129,6 +151,8 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       programs: [],
       metricsByProgram: {},
       insightsByProgram: {},
+      insightChatByProgram: {},
+      insightChatLoadingByProgram: {},
     })
   },
 
@@ -160,7 +184,12 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
   getInsights: (programId) => get().insightsByProgram[programId] || null,
   setInsights: (programId, insights) =>
     set((state) => ({
-      insightsByProgram: { ...state.insightsByProgram, [programId]: insights },
+      insightsByProgram: {
+        ...state.insightsByProgram,
+        [programId]: insights
+          ? { ...insights, generatedAt: insights.generatedAt || new Date().toISOString() }
+          : null,
+      },
     })),
   clearInsights: (programId) =>
     set((state) => {
@@ -168,6 +197,29 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       delete rest[programId]
       return { insightsByProgram: rest }
     }),
+
+  // Follow-up chat
+  insightChatByProgram: {},
+  insightChatLoadingByProgram: {},
+  getInsightChat: (programId) => get().insightChatByProgram[programId] || [],
+  setInsightChat: (programId, messages) =>
+    set((state) => ({
+      insightChatByProgram: { ...state.insightChatByProgram, [programId]: messages },
+    })),
+  addInsightChatMessage: (programId, message) =>
+    set((state) => ({
+      insightChatByProgram: {
+        ...state.insightChatByProgram,
+        [programId]: [...(state.insightChatByProgram[programId] || []), message],
+      },
+    })),
+  setInsightChatLoading: (programId, loading) =>
+    set((state) => ({
+      insightChatLoadingByProgram: {
+        ...state.insightChatLoadingByProgram,
+        [programId]: loading,
+      },
+    })),
 
   // Loading
   isSyncing: false,
