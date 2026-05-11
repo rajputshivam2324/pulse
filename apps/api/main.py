@@ -50,6 +50,14 @@ async def lifespan(app: FastAPI):
     """Application lifespan handler — startup/shutdown logic."""
     log.info("pulse_api_starting", version="0.1.0")
 
+    # Check AI layer configuration
+    from services.ai.nodes import check_ai_health
+    ai_health = check_ai_health()
+    if ai_health["status"] == "configured":
+        log.info("ai_layer_configured", model=ai_health["model"])
+    else:
+        log.warning("ai_layer_unconfigured", error=ai_health.get("error"))
+
     # Initialize Redis client eagerly in the lifespan (not lazily on first request)
     import redis.asyncio as redis
     redis_client = redis.from_url(

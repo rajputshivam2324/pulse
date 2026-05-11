@@ -1,0 +1,23 @@
+/home/shivam/.local/lib/python3.14/site-packages/langchain_core/_api/deprecation.py:25: UserWarning: Core Pydantic V1 functionality isn't compatible with Python 3.14 or greater.
+  from pydantic.v1.fields import FieldInfo as FieldInfoV1
+INFO:services.ai.nodes:ChatNVIDIA model initialised
+INFO:services.ai.nodes:ChatNVIDIA model initialised
+INFO:services.ai.nodes:Trying model: mistralai/mistral-nemotron
+INFO:services.ai.nodes:ChatNVIDIA model initialised
+INFO:services.ai.nodes:Trying model: mistralai/mistral-nemotron
+INFO:services.ai.nodes:ChatNVIDIA model initialised
+INFO:services.ai.nodes:Trying model: mistralai/mistral-nemotron
+INFO:services.ai.nodes:ChatNVIDIA model initialised
+INFO:services.ai.nodes:Trying model: mistralai/mistral-nemotron
+INFO:services.ai.nodes:ChatNVIDIA model initialised
+INFO:services.ai.nodes:Trying model: mistralai/mistral-nemotron
+INFO:services.ai.nodes:ChatNVIDIA model initialised
+INFO:services.ai.nodes:Trying model: mistralai/mistral-nemotron
+INFO:services.ai.nodes:ChatNVIDIA model initialised
+INFO:services.ai.nodes:Trying model: mistralai/mistral-nemotron
+
+=== AI Pipeline Test ===
+Headline: "Only 10% of users return after their first SWAP—fix this friction to boost 7-day retention from 25.5%."
+Health Score: 72
+Final Insights: 3
+Execution Trace: ['anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'insight_generator: generated 3 insights', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'retention_analyst: completed retention diagnosis', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'health_scorer: score = 72', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'insight_generator: generated 3 insights', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'retention_analyst: completed retention diagnosis', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'health_scorer: score = 72', 'quick_win_extractor: extracted quick wins', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'insight_generator: generated 3 insights', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'retention_analyst: completed retention diagnosis', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'health_scorer: score = 72', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'insight_generator: generated 3 insights', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'retention_analyst: completed retention diagnosis', 'anomaly_detector: found 3 anomalies', 'anomaly_detector: found 3 anomalies', 'anomaly_ranker: ranked 3 anomalies', 'health_scorer: score = 72', 'quick_win_extractor: extracted quick wins', 'output_assembler: final output assembled']

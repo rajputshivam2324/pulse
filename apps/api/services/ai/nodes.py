@@ -26,30 +26,114 @@ _model: ChatNVIDIA | None = None
 # NVIDIA NIM model to use — must be a known, supported type on api.nvidia.com
 _NVIDIA_MODEL = os.getenv("NVIDIA_MODEL", "mistralai/mistral-nemotron")
 
+# Valid fallback models when primary is degraded (from build.nvidia.com)
+_FALLBACK_MODELS = [
+    "meta/llama-3.1-8b-instruct",
+    "mistralai/mistral-small-4-119b-2603",
+    "meta/llama-3.1-70b-instruct",
+]
+
 # Timeout in seconds for each LLM HTTP request.
 # aiohttp default is 5 s which is far too short for large LLM responses.
 _LLM_TIMEOUT_SECONDS = int(os.getenv("LLM_TIMEOUT_SECONDS", "120"))
 
 
-def _get_model() -> ChatNVIDIA:
-    """Lazily create and cache the ChatNVIDIA model singleton."""
+def _get_model(model_name: str | None = None) -> ChatNVIDIA:
+    """Lazily create and cache the ChatNVIDIA model singleton.
+    
+    Args:
+        model_name: Optional specific model to use. If None, uses default _NVIDIA_MODEL.
+    """
     global _model
-    if _model is None:
-        api_key = os.getenv("NVIDIA_API_KEY")
-        if not api_key:
-            raise RuntimeError("NVIDIA_API_KEY environment variable is not set")
-        # Note: timeout is not a direct ChatNVIDIA param.
-        # HTTP timeouts are handled via httpx client config internally.
-        _model = ChatNVIDIA(
-            model=_NVIDIA_MODEL,
-            api_key=api_key,
+    if model_name is None:
+        if _model is not None:
+            return _model
+        model_name = _NVIDIA_MODEL
+    
+    api_key = os.getenv("NVIDIA_API_KEY")
+    if not api_key:
+        logger.error("NVIDIA_API_KEY environment variable is not set - AI insights will not work")
+        raise RuntimeError("NVIDIA_API_KEY environment variable is not set")
+    
+    try:
+        model = ChatNVIDIA(
+            model=model_name,
+            nvidia_api_key=api_key,
             temperature=0.6,
             top_p=0.7,
-            max_tokens=4096,
-            max_retries=3,
+            max_completion_tokens=4096,
         )
-        logger.info("ChatNVIDIA model initialised", extra={"model": _NVIDIA_MODEL})
-    return _model
+        logger.info("ChatNVIDIA model initialised", extra={"model": model_name})
+        if model_name == _NVIDIA_MODEL:
+            _model = model
+        return model
+    except Exception as e:
+        logger.error("Failed to initialize ChatNVIDIA model", extra={"error": str(e), "model": model_name})
+        raise
+
+
+async def _invoke_with_fallback(chain, payload: dict, timeout: int = _LLM_TIMEOUT_SECONDS):
+    """Invoke chain with automatic model fallback on degradation.
+    
+    Tries primary model first, then falls back through _FALLBACK_MODELS.
+    """
+    last_error = None
+    models_to_try = [_NVIDIA_MODEL] + _FALLBACK_MODELS
+    
+    for model_name in models_to_try:
+        try:
+            # Create fresh model instance for this attempt
+            current_model = _get_model(model_name)
+            
+            # Recreate chain with current model
+            from langchain_core.prompts import ChatPromptTemplate
+            if hasattr(chain, 'first'):
+                new_chain = chain.first | current_model
+            elif hasattr(chain, 'prompt'):
+                new_chain = chain.prompt | current_model
+            else:
+                new_chain = current_model
+            
+            logger.info(f"Trying model: {model_name}")
+            
+            import asyncio
+            response = await asyncio.wait_for(
+                new_chain.ainvoke(payload),
+                timeout=timeout,
+            )
+            return response
+            
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            # Degraded model - try next fallback
+            if "degraded" in error_str or "400" in error_str or "cannot be invoked" in error_str:
+                logger.warning(f"Model {model_name} degraded, trying fallback")
+                continue
+            # Other errors - don't retry
+            raise
+    
+    # All models failed
+    logger.error(f"All models failed. Last error: {last_error}")
+    raise last_error
+
+
+def _reset_model() -> None:
+    """Reset cached model singleton to force re-initialization on next call.
+    Use when a persistent error (e.g. DEGRADED) may be resolved by
+    re-creating the client."""
+    global _model
+    _model = None
+    logger.info("ChatNVIDIA model singleton reset")
+
+
+def check_ai_health() -> dict:
+    """Check if AI layer is properly configured. Called at startup."""
+    api_key = os.getenv("NVIDIA_API_KEY")
+    if not api_key:
+        return {"status": "unconfigured", "error": "NVIDIA_API_KEY not set"}
+    # Don't actually initialize the model here, just check config
+    return {"status": "configured", "model": _NVIDIA_MODEL}
 
 
 def safe_parse_json(text: str, fallback: dict | None = None) -> dict:
@@ -75,12 +159,18 @@ async def anomaly_detector_node(state: InsightPipelineState) -> dict:
     writer = get_stream_writer()
     writer({"status": "Scanning metrics for anomalies..."})
 
-    chain = ANOMALY_DETECTION_PROMPT | _get_model()
-    response = await chain.ainvoke(
-        # Keep payload compact for latency + token usage.
-        {"metrics_json": json.dumps(state["metrics_payload"], separators=(",", ":"), ensure_ascii=False)}
-    )
-    result = safe_parse_json(response.content)
+    try:
+        chain = ANOMALY_DETECTION_PROMPT | _get_model()
+        response = await _invoke_with_fallback(
+            chain,
+            {"metrics_json": json.dumps(state["metrics_payload"], separators=(",", ":"), ensure_ascii=False)}
+        )
+        result = safe_parse_json(response.content)
+    except Exception as e:
+        logger.error("Anomaly detection failed", extra={"error": str(e)})
+        # Return synthetic anomalies from metrics as fallback
+        result = _synthetic_anomalies_from_metrics(state["metrics_payload"])
+
     writer({"status": f"Found {len(result.get('anomalies', []))} anomalies"})
     trace = list(state.get("execution_trace", []))
     trace.append(
@@ -91,6 +181,53 @@ async def anomaly_detector_node(state: InsightPipelineState) -> dict:
         "anomalies": result.get("anomalies", []),
         "execution_trace": trace,
     }
+
+
+def _synthetic_anomalies_from_metrics(metrics: dict) -> dict:
+    """Generate synthetic anomalies from metrics when AI fails."""
+    summary = metrics.get("summary", {})
+    anomalies = []
+    
+    d7 = summary.get("d7_retention_rate", 0)
+    if d7 < 20:
+        anomalies.append({
+            "severity": "critical",
+            "metric": "d7_retention_rate",
+            "finding": f"D7 retention is critically low at {d7:.1f}%",
+            "why_it_matters": "Most users abandon the product within a week",
+            "recommendation": "Add re-engagement emails and onboarding improvements",
+        })
+    elif d7 < 30:
+        anomalies.append({
+            "severity": "high",
+            "metric": "d7_retention_rate",
+            "finding": f"D7 retention is below benchmark at {d7:.1f}%",
+            "why_it_matters": "Users are not returning after first week",
+            "recommendation": "Improve first-week user experience",
+        })
+    
+    worst_drop = summary.get("worst_funnel_drop_rate", 0)
+    if worst_drop > 50:
+        anomalies.append({
+            "severity": "high",
+            "metric": "funnel_drop",
+            "finding": f"Funnel drop-off is severe at {worst_drop:.1f}%",
+            "why_it_matters": "Users are dropping at the critical conversion step",
+            "recommendation": "Simplify the conversion flow and add progress indicators",
+        })
+    
+    worst_type = summary.get("worst_first_type_for_retention", "")
+    worst_return = summary.get("worst_first_type_return_rate", 0)
+    if worst_type and worst_return < 30:
+        anomalies.append({
+            "severity": "medium",
+            "metric": "per_type_retention",
+            "finding": f"{worst_type} has poor retention at {worst_return:.1f}%",
+            "why_it_matters": "This action type leads to high churn",
+            "recommendation": f"Add post-{worst_type} engagement flows",
+        })
+    
+    return {"anomalies": anomalies}
 
 
 async def anomaly_ranker_node(state: InsightPipelineState) -> dict:
@@ -127,12 +264,31 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
     )
 
     insights = []
-    chain = INSIGHT_GENERATION_PROMPT | _get_model()
+    try:
+        chain = INSIGHT_GENERATION_PROMPT | _get_model()
+    except Exception as e:
+        logger.error("Failed to initialize insight generator model", extra={"error": str(e)})
+        # Convert anomalies directly to insights as fallback
+        for i, anomaly in enumerate(top_anomalies):
+            insight = {
+                "title": anomaly.get("finding", f"Issue {i+1}"),
+                "finding": anomaly.get("finding", ""),
+                "why_it_matters": anomaly.get("why_it_matters", ""),
+                "recommendation": anomaly.get("recommendation", ""),
+                "severity": anomaly.get("severity", "medium"),
+            }
+            insights.append(insight)
+            writer({"insight": insight, "index": i + 1, "total": len(top_anomalies)})
+        writer({"status": f"Generated {len(insights)} insight cards (fallback mode)"})
+        trace = list(state.get("execution_trace", []))
+        trace.append(f"insight_generator: generated {len(insights)} insights (fallback)")
+        return {"raw_insights": insights, "execution_trace": trace}
 
     for i, anomaly in enumerate(top_anomalies):
         try:
             writer({"status": f"Drafting insight {i + 1}/{len(top_anomalies)}..."})
-            response = await chain.ainvoke(
+            response = await _invoke_with_fallback(
+                chain,
                 {
                     "program_name": program_name,
                     "anomaly_json": json.dumps(anomaly, separators=(",", ":"), ensure_ascii=False),
@@ -147,6 +303,16 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
         except Exception as e:
             # Log but don't fail the pipeline
             logger.warning("Insight generation failed for anomaly", extra={"index": i, "error": str(e)})
+            # Use anomaly data as fallback insight
+            insight = {
+                "title": anomaly.get("finding", f"Issue {i+1}"),
+                "finding": anomaly.get("finding", ""),
+                "why_it_matters": anomaly.get("why_it_matters", ""),
+                "recommendation": anomaly.get("recommendation", ""),
+                "severity": anomaly.get("severity", "medium"),
+            }
+            insights.append(insight)
+            writer({"insight": insight, "index": i + 1, "total": len(top_anomalies)})
             continue
 
     writer({"status": f"Generated {len(insights)} insight cards"})
@@ -163,9 +329,10 @@ async def retention_analyst_node(state: InsightPipelineState) -> dict:
     """
     writer = get_stream_writer()
     writer({"status": "Computing retention diagnosis..."})
-    chain = RETENTION_DIAGNOSIS_PROMPT | _get_model()
     try:
-        response = await chain.ainvoke(
+        chain = RETENTION_DIAGNOSIS_PROMPT | _get_model()
+        response = await _invoke_with_fallback(
+            chain,
             {
                 "program_name": state.get("program_name") or "this program",
                 "retention_cohorts_json": json.dumps(
@@ -262,9 +429,10 @@ async def quick_win_extractor_node(state: InsightPipelineState) -> dict:
     """
     writer = get_stream_writer()
     writer({"status": "Extracting quick wins..."})
-    chain = QUICK_WINS_PROMPT | _get_model()
     try:
-        response = await chain.ainvoke(
+        chain = QUICK_WINS_PROMPT | _get_model()
+        response = await _invoke_with_fallback(
+            chain,
             {
                 "program_name": state.get("program_name") or "this program",
                 "insights_json": json.dumps(state["raw_insights"], separators=(",", ":"), ensure_ascii=False),
@@ -298,7 +466,8 @@ async def output_assembler_node(state: InsightPipelineState) -> dict:
 
     try:
         chain = HEADLINE_PROMPT | _get_model()
-        headline_response = await chain.ainvoke(
+        headline_response = await _invoke_with_fallback(
+            chain,
             {
                 "program_name": state.get("program_name") or "your program",
                 "top_insight_json": json.dumps(top_insight, separators=(",", ":"), ensure_ascii=False),

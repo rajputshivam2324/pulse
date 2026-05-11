@@ -4,39 +4,31 @@ Uses the same NVIDIA ChatNVIDIA model as the main insight pipeline.
 """
 
 import asyncio
+import httpx
 import json
 import logging
 import os
 import re
 
+from langchain_core.messages import HumanMessage, SystemMessage, AIMessage
 from langchain_core.prompts import ChatPromptTemplate
 
 from .nodes import _get_model, safe_parse_json
 
 logger = logging.getLogger(__name__)
-FOLLOWUP_TIMEOUT_SECONDS = float(os.getenv("FOLLOWUP_TIMEOUT_SECONDS", "12"))
+# Increased from 12s - NVIDIA NIM cold start can take 15-30s
+FOLLOWUP_TIMEOUT_SECONDS = float(os.getenv("FOLLOWUP_TIMEOUT_SECONDS", "30"))
 SUGGESTION_TIMEOUT_SECONDS = float(os.getenv("SUGGESTION_TIMEOUT_SECONDS", "4"))
 
+# Valid NVIDIA NIM models for fallback (from build.nvidia.com)
+FALLBACK_MODELS = [
+    "meta/llama-3.1-8b-instruct",      # fast, reliable
+    "mistralai/mistral-small-4-119b-2603",  # good quality
+    "meta/llama-3.1-70b-instruct",    # more capable
+]
 
-FOLLOWUP_PROMPT = ChatPromptTemplate.from_messages([
-    ("system", """You are a product analytics expert for Solana programs.
-You have complete metrics for {program_name}. Answer with SPECIFIC NUMBERS from the data.
-Respond in clean Markdown with sections and concrete numbers.
-When user asks for comparison/difference, always return:
-1) a comparison table,
-2) delta/difference callouts,
-3) specific recommendations tied to those deltas.
-If the user asks for formulas or projections, include math notation (inline or block).
-Do not invent numbers. Never give generic advice.
-
-Metrics data:
-{metrics_json}
-
-Previous AI insights:
-{insights_json}
-"""),
-    ("human", "{question}"),
-])
+# Import tenacity at module level for retry decorator
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 SUGGESTION_PROMPT = ChatPromptTemplate.from_messages([
     ("system", """Generate 3 follow-up questions a founder would want to ask based on these insights.
@@ -249,37 +241,170 @@ async def answer_followup(
     metrics: dict,
     insights: dict | None,
     program_name: str,
+    conversation_history: list[dict] | None = None,
 ) -> dict:
-    """Answer a founder's follow-up question with metrics context."""
+    """Answer a founder's follow-up question with metrics context and conversation history."""
+    
+    # Check if model is available
     try:
-        chain = FOLLOWUP_PROMPT | _get_model()
-        response = await asyncio.wait_for(
-            chain.ainvoke({
-                "program_name": program_name,
-                # Keep payload compact for latency + token usage.
-                "metrics_json": json.dumps(metrics, separators=(",", ":"), ensure_ascii=False),
-                "insights_json": json.dumps(insights or {}, separators=(",", ":"), ensure_ascii=False),
-                "question": question,
-            }),
-            timeout=max(FOLLOWUP_TIMEOUT_SECONDS, 18),
-        )
-        answer = response.content.strip()
-        lowered = question.lower()
-        asks_breakdown = any(k in lowered for k in ["breakdown", "detailed", "report", "explain"])
-        asks_compare = any(k in lowered for k in ["compare", "comparison", "difference", "diff", "versus", "vs"])
-        if asks_breakdown:
-            answer = _detailed_breakdown_answer(metrics, insights)
-        elif asks_compare and _is_low_quality_answer(answer):
-            answer = _fallback_answer(question, metrics)
-        elif _is_low_quality_answer(answer):
-            answer = _detailed_breakdown_answer(metrics, insights)
+        model = _get_model()
     except Exception as e:
-        logger.warning("Follow-up answer failed; using fallback", extra={"error": str(e)})
+        logger.error("AI model not available for follow-up", extra={"error": str(e)})
+        # Return fallback immediately if no AI
         lowered = question.lower()
         if any(k in lowered for k in ["breakdown", "detailed", "report", "explain", "compare", "difference", "versus", "vs"]):
             answer = _detailed_breakdown_answer(metrics, insights)
         else:
             answer = _fallback_answer(question, metrics)
+        return {
+            "answer": answer,
+            "program_name": program_name,
+            "suggested_followups": fallback_suggestions(metrics, insights),
+            "used_fallback": True,
+        }
+    
+    # Prepare template variables
+    metrics_json = json.dumps(metrics, separators=(",", ":"), ensure_ascii=False)
+    insights_json = json.dumps(insights or {}, separators=(",", ":"), ensure_ascii=False)
+    
+    # Build system prompt with proper template format
+    system_template = """You are a product analytics expert for Solana programs.
+You have complete metrics for {program_name}. Answer with SPECIFIC NUMBERS from the data.
+Respond in clean Markdown with sections and concrete numbers.
+When user asks for comparison/difference, always return:
+1) a comparison table,
+2) delta/difference callouts,
+3) specific recommendations tied to those deltas.
+If the user asks for formulas or projections, include math notation (inline or block).
+Do not invent numbers. Never give generic advice.
+
+Metrics data:
+{metrics_json}
+
+Previous AI insights:
+{insights_json}
+"""
+    
+    # Build messages using direct Message objects (NOT templates).
+    # Using from_template() on user/AI content is a critical bug: any
+    # curly braces in the content (e.g. JSON snippets like {"d7": 15})
+    # would be parsed as template variables, causing KeyError or
+    # malformed payloads sent to the NVIDIA API.
+    messages = []
+    
+    # System message with injected data (f-string, not template)
+    system_content = f"""You are a product analytics expert for Solana programs.
+You have complete metrics for {program_name}. Answer with SPECIFIC NUMBERS from the data.
+Respond in clean Markdown with sections and concrete numbers.
+When user asks for comparison/difference, always return:
+1) a comparison table,
+2) delta/difference callouts,
+3) specific recommendations tied to those deltas.
+If the user asks for formulas or projections, include math notation (inline or block).
+Do not invent numbers. Never give generic advice.
+
+Metrics data:
+{metrics_json}
+
+Previous AI insights:
+{insights_json}
+"""
+    if conversation_history:
+        system_content += "\n\nThis is a follow-up conversation. Consider the previous discussion context."
+    
+    messages.append(SystemMessage(content=system_content))
+    
+    # Add conversation history as direct Message objects
+    if conversation_history:
+        for msg in conversation_history[-6:]:
+            role = msg.get("role", "user")
+            content = msg.get("content", "")
+            if role == "user":
+                messages.append(HumanMessage(content=content))
+            else:
+                messages.append(AIMessage(content=content))
+    
+    # Add current question
+    messages.append(HumanMessage(content=question))
+    
+    # Try with fallback models
+    last_error = None
+    models_to_try = [None] + FALLBACK_MODELS
+    
+    for model_attempt in models_to_try:
+        try:
+            if model_attempt:
+                # Create fallback model
+                logger.info(f"Trying fallback model: {model_attempt}")
+                from langchain_nvidia_ai_endpoints import ChatNVIDIA
+                current_model = ChatNVIDIA(
+                    model=model_attempt,
+                    nvidia_api_key=os.getenv("NVIDIA_API_KEY"),
+                    temperature=0.6,
+                    top_p=0.7,
+                    max_tokens=4096,
+                )
+            else:
+                current_model = model
+                model_attempt = "primary"
+            
+            logger.info("Calling AI for follow-up", extra={
+                "program_name": program_name,
+                "question": question[:100],
+                "history_length": len(conversation_history) if conversation_history else 0,
+                "model": model_attempt,
+            })
+            
+            # Retry with exponential backoff for transient errors
+            from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+            
+            @retry(
+                stop=stop_after_attempt(3),
+                wait=wait_exponential(multiplier=1, min=2, max=10),
+                retry=retry_if_exception_type((TimeoutError, httpx.TimeoutException, httpx.ConnectError))
+            )
+            async def call_with_retry():
+                response = await current_model.ainvoke(messages)
+                return response
+            
+            response = await call_with_retry()
+            answer = response.content.strip()
+            break  # Success!
+            
+        except Exception as e:
+            last_error = e
+            error_str = str(e).lower()
+            # Degraded model - try next fallback
+            if "degraded" in error_str or "400" in error_str or "cannot be invoked" in error_str:
+                logger.warning(f"Model {model_attempt} degraded, trying fallback")
+                continue
+            # Other errors - don't retry
+            raise
+    else:
+        # All models failed - use fallback answer
+        logger.error(f"All models failed. Last error: {last_error}")
+        lowered = question.lower()
+        if any(k in lowered for k in ["breakdown", "detailed", "report", "explain", "compare", "difference", "versus", "vs"]):
+            answer = _detailed_breakdown_answer(metrics, insights)
+        else:
+            answer = _fallback_answer(question, metrics)
+    
+    # Quality checks on AI answer
+    lowered = question.lower()
+    asks_breakdown = any(k in lowered for k in ["breakdown", "detailed", "report", "explain"])
+    asks_compare = any(k in lowered for k in ["compare", "comparison", "difference", "diff", "versus", "vs"])
+    
+    if asks_breakdown and _is_low_quality_answer(answer):
+        answer = _detailed_breakdown_answer(metrics, insights)
+    elif asks_compare and _is_low_quality_answer(answer):
+        answer = _fallback_answer(question, metrics)
+    elif _is_low_quality_answer(answer):
+        answer = _detailed_breakdown_answer(metrics, insights)
+        
+    logger.info("AI follow-up completed", extra={
+        "answer_length": len(answer),
+        "used_ai": True,
+    })
 
     return {
         "answer": answer,

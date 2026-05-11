@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 
 # Plan-gated features
 AI_INSIGHTS_PLANS = {"team", "protocol"}
-INSIGHT_PIPELINE_TIMEOUT_SECONDS = float(os.getenv("INSIGHT_PIPELINE_TIMEOUT_SECONDS", "25"))
+# Increased from 25s to 60s to allow multiple LLM calls to complete
+INSIGHT_PIPELINE_TIMEOUT_SECONDS = float(os.getenv("INSIGHT_PIPELINE_TIMEOUT_SECONDS", "60"))
 
 
 async def _check_plan_feature(wallet: str, feature: str) -> bool:
@@ -403,6 +404,51 @@ async def get_insight_history(
         raise HTTPException(status_code=500, detail="Failed to fetch insight history")
 
 
+@router.post("/test-ai")
+async def test_ai_direct():
+    """Test AI directly without auth - for debugging only."""
+    from fastapi.responses import PlainTextResponse
+    import os
+    import traceback
+    
+    api_key = os.getenv("NVIDIA_API_KEY")
+    
+    if not api_key:
+        return PlainTextResponse(f"ERROR: NVIDIA_API_KEY not found in env\nEnv keys: {list(os.environ.keys())[:20]}")
+    
+    try:
+        from services.ai.followup import answer_followup
+        result = await answer_followup(
+            question="Say exactly 'AI_WORKING' and nothing else",
+            metrics={"summary": {"test": True}},
+            insights=None,
+            program_name="Test",
+            conversation_history=None
+        )
+        return PlainTextResponse(f"SUCCESS: {result['answer'][:200]}")
+    except Exception as e:
+        tb = traceback.format_exc()
+        return PlainTextResponse(f"ERROR: {type(e).__name__}: {str(e)}\n\nTRACEBACK:\n{tb}")
+
+@router.get("/ai-health")
+async def ai_health_check():
+    """Diagnostic endpoint to check if AI layer is configured and responding."""
+    from services.ai.nodes import check_ai_health, _get_model
+    
+    health = check_ai_health()
+    
+    # Try to actually initialize the model to verify it works
+    if health["status"] == "configured":
+        try:
+            model = _get_model()
+            health["model_initialized"] = True
+        except Exception as e:
+            health["model_initialized"] = False
+            health["init_error"] = str(e)
+    
+    return health
+
+
 @router.post("/followup/{program_id}")
 @limiter.limit("20/hour")
 async def followup_question(
@@ -442,6 +488,8 @@ async def followup_question(
         body = {}
 
     question = str(body.get("question", "")).strip()
+    thread_id = str(body.get("thread_id", "")).strip()
+    
     if not question:
         raise HTTPException(status_code=400, detail="Question is required.")
 
@@ -454,14 +502,42 @@ async def followup_question(
 
     insights = await cache_get(insights_cache_key(program_id))
 
+    # Fetch conversation history if thread_id provided
+    conversation_history = None
+    if thread_id:
+        try:
+            # Verify thread ownership
+            thread_check = (
+                supabase.table("insight_chat_threads")
+                .select("id")
+                .eq("id", thread_id)
+                .eq("user_id", user_id)
+                .execute()
+            )
+            if thread_check.data:
+                # Get previous messages
+                msgs_res = (
+                    supabase.table("insight_chat_messages")
+                    .select("role, content")
+                    .eq("thread_id", thread_id)
+                    .order("created_at", desc=False)
+                    .execute()
+                )
+                conversation_history = msgs_res.data if msgs_res.data else []
+        except Exception as e:
+            logger.warning("Failed to load thread history", extra={"error": str(e), "thread_id": thread_id})
+
     from services.ai.followup import answer_followup
 
-    return await answer_followup(
+    result = await answer_followup(
         question=question,
         metrics=metrics,
         insights=insights,
         program_name=body.get("program_name") or program_id,
+        conversation_history=conversation_history,
     )
+    
+    return result
 
 
 @router.get("/followup_threads/{program_id}")
@@ -755,8 +831,12 @@ async def generate_insights_stream(
             yield emit("final", {"report": output})
             return
         except Exception as e:
-            logger.warning("Streaming pipeline failed; using fallback", extra={"error": str(e), "program_id": program_id})
-            yield emit("status", {"status": "error_fallback", "error": str(e)})
+            import traceback
+            error_msg = str(e)
+            tb = traceback.format_exc()
+            logger.error("Streaming pipeline failed; using fallback", 
+                        extra={"error": error_msg, "traceback": tb, "program_id": program_id})
+            yield emit("status", {"status": "error_fallback", "error": error_msg})
             output = _fallback_insights(metrics, program_name)
             await cache_set(insights_cache_key(program_id), output, ttl_seconds=900)
             yield emit("final", {"report": output})
