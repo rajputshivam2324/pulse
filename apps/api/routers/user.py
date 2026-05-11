@@ -35,19 +35,17 @@ async def get_me(wallet: str = Depends(require_auth)):
                 supabase.table("users")
                 .upsert({"wallet_pubkey": wallet, "plan": "free"}, on_conflict="wallet_pubkey")
                 .select("id, wallet_pubkey, plan, plan_expires_at, created_at")
-                .single()
                 .execute()
             )
-            user = insert.data or {"id": None, "wallet_pubkey": wallet, "plan": "free"}
+            user = insert.data[0] if insert.data else {"id": None, "wallet_pubkey": wallet, "plan": "free"}
         else:
             result = (
                 supabase.table("users")
                 .select("id, wallet_pubkey, plan, plan_expires_at, created_at")
                 .eq("id", user_id)
-                .single()
                 .execute()
             )
-            user = result.data
+            user = result.data[0] if result.data else None
 
         # Count programs and total transactions for usage meters
         programs_result = (

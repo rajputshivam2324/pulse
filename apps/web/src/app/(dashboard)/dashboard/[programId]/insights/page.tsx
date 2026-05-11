@@ -201,7 +201,17 @@ async function consumeSseResponse(
 
   while (true) {
     if (isAborted()) return
-    const { value, done } = await reader.read()
+    let value: Uint8Array | undefined
+    let done = false
+    try {
+      const readResult = await reader.read()
+      value = readResult.value
+      done = readResult.done
+    } catch (e) {
+      // AbortError is expected when canceling previous stream
+      if (signal?.aborted) return
+      throw e
+    }
     if (done) break
     buffer += decoder.decode(value, { stream: true })
 

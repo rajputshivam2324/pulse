@@ -38,15 +38,17 @@ def _get_model() -> ChatNVIDIA:
         api_key = os.getenv("NVIDIA_API_KEY")
         if not api_key:
             raise RuntimeError("NVIDIA_API_KEY environment variable is not set")
+        # Note: timeout is not a direct ChatNVIDIA param.
+        # HTTP timeouts are handled via httpx client config internally.
         _model = ChatNVIDIA(
             model=_NVIDIA_MODEL,
             api_key=api_key,
             temperature=0.6,
             top_p=0.7,
             max_tokens=4096,
-            timeout=_LLM_TIMEOUT_SECONDS,
+            max_retries=3,
         )
-        logger.info("ChatNVIDIA model initialised", extra={"model": _NVIDIA_MODEL, "timeout": _LLM_TIMEOUT_SECONDS})
+        logger.info("ChatNVIDIA model initialised", extra={"model": _NVIDIA_MODEL})
     return _model
 
 

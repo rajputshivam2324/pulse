@@ -547,10 +547,12 @@ async def create_followup_thread(
                 "title": title,
             })
             .select("id, title, created_at, updated_at")
-            .single()
             .execute()
         )
-        return {"thread": res.data}
+        thread = res.data[0] if res.data else None
+        if not thread:
+            raise HTTPException(status_code=500, detail="Failed to create thread")
+        return {"thread": thread}
     except Exception as e:
         logger.error("Failed to create follow-up thread: %s", str(e))
         raise HTTPException(status_code=500, detail="Failed to create thread")

@@ -12,6 +12,7 @@ import httpx
 import os
 import logging
 from typing import Optional
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
 
 logger = logging.getLogger(__name__)
 
@@ -63,15 +64,28 @@ async def get_transactions_for_address(
     if after:
         params["after"] = after
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        response = await client.get(url, params=params)
-        try:
-            response.raise_for_status()
-        except httpx.HTTPStatusError as e:
-            if "Failed to find events within the search period" in e.response.text or "not found" in e.response.text.lower():
-                return []
-            raise
-        return response.json()
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=2, max=10),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)),
+        reraise=True,
+    )
+    async def _fetch_with_retry():
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(url, params=params)
+            try:
+                response.raise_for_status()
+            except httpx.HTTPStatusError as e:
+                if "Failed to find events within the search period" in e.response.text or "not found" in e.response.text.lower():
+                    return []
+                raise
+            return response.json()
+
+    try:
+        return await _fetch_with_retry()
+    except httpx.TimeoutException as e:
+        logger.error(f"Helius API timeout after 3 retries for address {address}")
+        raise
 
 
 async def get_all_transactions(
@@ -332,32 +346,45 @@ async def verify_payment_transaction(signature: str, expected_wallet: str, expec
     params = {"api-key": HELIUS_API_KEY}
     payload = {"transactions": [signature]}
     
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            response = await client.post(url, params=params, json=payload)
-            response.raise_for_status()
-            data = response.json()
-            if not data or not isinstance(data, list) or len(data) == 0:
-                return False
-            
-            tx = data[0]
-            # Check for USDC mints (Mainnet or Devnet)
-            USDC_MINTS = {
-                "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", # Mainnet
-                "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"  # Devnet
-            }
-            
-            for transfer in tx.get("tokenTransfers", []):
-                mint = transfer.get("mint")
-                if mint in USDC_MINTS:
-                    from_user = transfer.get("fromUserAccount", "")
-                    to_user = transfer.get("toUserAccount", "")
-                    amount = transfer.get("tokenAmount", 0)
-                    
-                    if from_user == expected_wallet and to_user == TREASURY_WALLET_ADDRESS and float(amount) >= expected_amount:
-                        return True
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=5),
+        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError)),
+        reraise=True,
+    )
+    async def _verify_with_retry():
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            try:
+                response = await client.post(url, params=params, json=payload)
+                response.raise_for_status()
+                data = response.json()
+                if not data or not isinstance(data, list) or len(data) == 0:
+                    return False
+                
+                tx = data[0]
+                # Check for USDC mints (Mainnet or Devnet)
+                USDC_MINTS = {
+                    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v", # Mainnet
+                    "4zMMC9srt5Ri5X14GAgXhaHii3GnPAEERYPJgZJDncDU"  # Devnet
+                }
+                
+                for transfer in tx.get("tokenTransfers", []):
+                    mint = transfer.get("mint")
+                    if mint in USDC_MINTS:
+                        from_user = transfer.get("fromUserAccount", "")
+                        to_user = transfer.get("toUserAccount", "")
+                        amount = transfer.get("tokenAmount", 0)
                         
-            return False
-        except Exception as e:
-            logger.error("Failed to verify payment transaction", extra={"signature": signature, "error": str(e)})
-            return False
+                        if from_user == expected_wallet and to_user == TREASURY_WALLET_ADDRESS and float(amount) >= expected_amount:
+                            return True
+                            
+                return False
+            except Exception as e:
+                logger.error("Failed to verify payment transaction", extra={"signature": signature, "error": str(e)})
+                return False
+    
+    try:
+        return await _verify_with_retry()
+    except httpx.TimeoutException:
+        logger.error("Helius payment verification timeout", extra={"signature": signature})
+        return False
