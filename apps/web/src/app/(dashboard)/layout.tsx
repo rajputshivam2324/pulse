@@ -65,8 +65,8 @@ export default function DashboardLayout({
 
   return (
     <AuthGuard>
-      {/* Page content with bottom padding for nav bar */}
-      <div className="pb-16">
+      {/* Page content (individual pages already include bottom spacing) */}
+      <div>
         {children}
       </div>
 
