@@ -8,6 +8,7 @@ import {
   WalletSegments, ActivityHeatmap, WhaleTable, SignalFeed, DropOffBreakdown,
 } from '@/components/dashboard/Charts'
 import { canAccess } from '@/lib/plans'
+import { buildUpgradeUrl } from '@/lib/upgrade'
 
 const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 
@@ -264,8 +265,8 @@ export default function DashboardPage() {
   const whales = rawWhales.map((w) => ({
     address: String(w.address ?? ''),
     txns: Number(w.txns ?? 0),
-    volume_sol: Number(w.volumeSol ?? w.volume_sol ?? 0),
-    share_pct: Number(w.sharePct ?? w.share_pct ?? 0),
+    volume_sol: Number((w as any).volumeSol ?? (w as any).volume_sol ?? 0),
+    share_pct: Number((w as any).sharePct ?? (w as any).share_pct ?? 0),
   }))
   const dropOffBreakdown = rawDropOff.map((d) => ({
     label: String(d.label ?? ''),
@@ -451,7 +452,7 @@ export default function DashboardPage() {
                     if (canAccess(user.plan, 'ai_insights')) {
                       router.push(`/dashboard/${programId}/insights`)
                     } else {
-                      router.push('/account')
+                      router.push(buildUpgradeUrl(`/dashboard/${programId}`))
                     }
                   }}
                 />
@@ -482,7 +483,7 @@ export default function DashboardPage() {
                       </button>
                     ) : (
                       <>
-                        <button onClick={() => router.push('/account')} className="btn-hero">
+                        <button onClick={() => router.push(buildUpgradeUrl(`/dashboard/${programId}`))} className="btn-hero">
                           <span className="btn-label">Unlock AI Diagnostics</span>
                         </button>
                         <span className="text-[9px] text-gray-500 uppercase tracking-widest f1-m">Team & Protocol · from $99/mo</span>

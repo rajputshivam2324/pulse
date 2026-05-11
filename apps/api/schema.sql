@@ -258,6 +258,42 @@ create policy "Users can read own insight reports" on insight_reports
   );
 
 -- =============================================================
+-- FOLLOW-UP CHAT PERSISTENCE (per user + program)
+-- =============================================================
+create table if not exists insight_chat_threads (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid references users(id) on delete cascade not null,
+  program_id uuid references programs(id) on delete cascade not null,
+  title text not null default 'New Chat',
+  created_at timestamptz default now() not null,
+  updated_at timestamptz default now() not null
+);
+
+create table if not exists insight_chat_messages (
+  id uuid primary key default gen_random_uuid(),
+  thread_id uuid references insight_chat_threads(id) on delete cascade not null,
+  role text not null check (role in ('user', 'ai')),
+  content text not null,
+  created_at timestamptz default now() not null
+);
+
+create index if not exists idx_insight_chat_threads_user_program
+  on insight_chat_threads(user_id, program_id, updated_at desc);
+create index if not exists idx_insight_chat_messages_thread_created
+  on insight_chat_messages(thread_id, created_at asc);
+
+alter table insight_chat_threads enable row level security;
+alter table insight_chat_messages enable row level security;
+
+create policy "Users can read own chat threads" on insight_chat_threads
+  for select using (user_id = auth.uid());
+
+create policy "Users can read own chat messages" on insight_chat_messages
+  for select using (
+    thread_id in (select id from insight_chat_threads where user_id = auth.uid())
+  );
+
+-- =============================================================
 -- SERVICE ROLE BYPASS (for backend API operations)
 -- The FastAPI backend uses the service role key which bypasses RLS.
 -- This is by design — the backend validates auth via JWT middleware.

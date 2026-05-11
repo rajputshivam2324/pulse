@@ -61,17 +61,18 @@ async def get_me(wallet: str = Depends(require_auth)):
         total_txns = 0
         if programs:
             program_ids = [p["id"] for p in programs]
-            for pid in program_ids:
-                try:
-                    txn_count = (
-                        supabase.table("transactions")
-                        .select("id", count="exact")
-                        .eq("program_id", pid)
-                        .execute()
-                    )
-                    total_txns += txn_count.count or 0
-                except Exception:
-                    pass
+            try:
+                # Single aggregate query (instead of one count query per program)
+                # to avoid N+1 latency on /user/me for accounts with many programs.
+                txn_count = (
+                    supabase.table("transactions")
+                    .select("id", count="exact", head=True)
+                    .in_("program_id", program_ids)
+                    .execute()
+                )
+                total_txns = txn_count.count or 0
+            except Exception:
+                total_txns = 0
 
         # Fetch payment history
         payments_result = (
@@ -126,7 +127,8 @@ async def upgrade_plan(
     In production this should verify the on-chain transaction before upgrading.
     For demo mode (DEMO_BILLING=true), it upgrades immediately on signature submission.
     """
-    DEMO_BILLING = os.getenv("DEMO_BILLING", "true").lower() == "true"
+    # Safe-by-default: demo billing must be explicitly enabled.
+    DEMO_BILLING = os.getenv("DEMO_BILLING", "false").lower() == "true"
     VALID_PLANS = {"team", "protocol"}
 
     try:

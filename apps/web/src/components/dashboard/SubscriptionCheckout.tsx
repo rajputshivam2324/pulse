@@ -69,7 +69,7 @@ export function SubscriptionCheckout({ plan, userId, onSuccess }: CheckoutProps)
         <>
           <div
             className="w-16 h-16 rounded-2xl flex items-center justify-center mx-auto mb-4"
-            style={{ background: 'linear-gradient(135deg, #8b5cf6, #06b6d4)' }}
+            style={{ background: 'linear-gradient(135deg, #b3b3b8, #d6d6da)' }}
           >
             <span className="text-2xl">💎</span>
           </div>

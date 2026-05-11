@@ -15,6 +15,8 @@ import { useEffect, useState, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { usePulseStore } from '@/store'
+import { PLAN_LIMITS, type PlanType } from '@/lib/plans'
+import { buildUpgradeUrl } from '@/lib/upgrade'
 
 const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 
@@ -33,6 +35,10 @@ export default function DashboardHomePage() {
   const [programs, setPrograms] = useState<Program[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  const currentPlan = PLAN_LIMITS[(user.plan as PlanType) || 'free'] || PLAN_LIMITS.free
+  const atProgramLimit = currentPlan.max_programs !== -1 && programs.length >= currentPlan.max_programs
+  const addProgramHref = atProgramLimit ? buildUpgradeUrl('/dashboard/new') : '/dashboard/new'
 
   const fetchPrograms = useCallback(async () => {
     if (!user.token) return
@@ -102,12 +108,12 @@ export default function DashboardHomePage() {
           <h1 className="text-sm f1-h font-bold text-black/80 uppercase tracking-widest">Programs</h1>
         </div>
         <div className="flex items-center gap-3">
-          <Link href="/dashboard/new" className="btn-hero text-[10px] uppercase tracking-widest">
+          <Link href={addProgramHref} className="btn-hero text-[10px] uppercase tracking-widest">
             <span className="btn-label flex items-center gap-2">
               <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
-              Add Program
+              {atProgramLimit ? 'Upgrade to Add' : 'Add Program'}
             </span>
           </Link>
         </div>
@@ -161,12 +167,12 @@ export default function DashboardHomePage() {
               <p className="text-xs f1-m text-black/50 uppercase tracking-widest mb-8 max-w-md mx-auto">
                 Add your first Solana program to start tracking on-chain analytics and AI insights.
               </p>
-              <Link href="/dashboard/new" className="btn-hero text-xs uppercase tracking-widest inline-flex">
+              <Link href={addProgramHref} className="btn-hero text-xs uppercase tracking-widest inline-flex">
                 <span className="btn-label flex items-center gap-2">
                   <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                     <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
                   </svg>
-                  Add Your First Program
+                  {atProgramLimit ? 'Upgrade to Add' : 'Add Your First Program'}
                 </span>
               </Link>
             </div>
@@ -221,14 +227,14 @@ export default function DashboardHomePage() {
 
             {/* Add Another */}
             <Link
-              href="/dashboard/new"
+              href={addProgramHref}
               className="plate p-5 flex items-center justify-center gap-3 text-black/40 hover:text-black/70 transition-colors group no-underline"
             >
               <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
                 <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
               </svg>
               <span className="text-[10px] f1-m font-bold uppercase tracking-widest">
-                Add Another Program
+                {atProgramLimit ? 'Upgrade to Add' : 'Add Another Program'}
               </span>
             </Link>
           </div>

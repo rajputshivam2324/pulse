@@ -66,6 +66,45 @@ export interface InsightChatThread {
 const CHAT_THREADS_KEY = 'pulse_insight_chat_threads'
 const CHAT_ACTIVE_KEY = 'pulse_insight_chat_active_thread'
 
+function getChatStorageKeys(wallet?: string | null) {
+  const suffix = wallet ? `:${wallet}` : ':anonymous'
+  return {
+    threadsKey: `${CHAT_THREADS_KEY}${suffix}`,
+    activeKey: `${CHAT_ACTIVE_KEY}${suffix}`,
+  }
+}
+
+function readChatStateFromStorage(wallet?: string | null): {
+  savedThreads: Record<string, InsightChatThread[]>
+  savedActive: Record<string, string | null>
+  activeMessagesByProgram: Record<string, InsightChatMessage[]>
+} {
+  if (typeof window === 'undefined') {
+    return { savedThreads: {}, savedActive: {}, activeMessagesByProgram: {} }
+  }
+
+  const { threadsKey, activeKey } = getChatStorageKeys(wallet)
+  const savedThreadsRaw = localStorage.getItem(threadsKey)
+  const savedActiveRaw = localStorage.getItem(activeKey)
+
+  // Backward compatibility: if wallet namespaced keys don't exist yet,
+  // fall back to legacy global keys once.
+  const threadsSource = savedThreadsRaw ?? localStorage.getItem(CHAT_THREADS_KEY)
+  const activeSource = savedActiveRaw ?? localStorage.getItem(CHAT_ACTIVE_KEY)
+
+  const savedThreads = threadsSource ? JSON.parse(threadsSource) as Record<string, InsightChatThread[]> : {}
+  const savedActive = activeSource ? JSON.parse(activeSource) as Record<string, string | null> : {}
+  const activeMessagesByProgram: Record<string, InsightChatMessage[]> = {}
+
+  Object.entries(savedThreads).forEach(([programId, threads]) => {
+    const activeId = savedActive[programId]
+    const activeThread = threads.find((t) => t.id === activeId) || threads[0]
+    activeMessagesByProgram[programId] = activeThread?.messages || []
+  })
+
+  return { savedThreads, savedActive, activeMessagesByProgram }
+}
+
 function generateThreadId(): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID()
@@ -83,11 +122,13 @@ function deriveThreadTitle(messages: InsightChatMessage[]): string {
 
 function persistChatState(
   threadsByProgram: Record<string, InsightChatThread[]>,
-  activeByProgram: Record<string, string | null>
+  activeByProgram: Record<string, string | null>,
+  wallet?: string | null
 ) {
   if (typeof window === 'undefined') return
-  localStorage.setItem(CHAT_THREADS_KEY, JSON.stringify(threadsByProgram))
-  localStorage.setItem(CHAT_ACTIVE_KEY, JSON.stringify(activeByProgram))
+  const { threadsKey, activeKey } = getChatStorageKeys(wallet)
+  localStorage.setItem(threadsKey, JSON.stringify(threadsByProgram))
+  localStorage.setItem(activeKey, JSON.stringify(activeByProgram))
 }
 
 interface PulseStore {
@@ -128,6 +169,7 @@ interface PulseStore {
   insightChatLoadingByProgram: Record<string, boolean>
   getInsightChatThreads: (programId: string) => InsightChatThread[]
   getActiveInsightChatThreadId: (programId: string) => string | null
+  hydrateInsightChatThreads: (programId: string, threads: InsightChatThread[], activeThreadId?: string | null) => void
   createInsightChatThread: (programId: string, title?: string) => string
   setActiveInsightChatThread: (programId: string, threadId: string) => void
   getInsightChat: (programId: string) => InsightChatMessage[]
@@ -152,16 +194,7 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       const wallet = localStorage.getItem('pulse_wallet')
       const plan = localStorage.getItem('pulse_plan') || 'free'
       const savedProgram = localStorage.getItem('pulse_active_program')
-      const savedThreadsRaw = localStorage.getItem(CHAT_THREADS_KEY)
-      const savedActiveRaw = localStorage.getItem(CHAT_ACTIVE_KEY)
-      const savedThreads = savedThreadsRaw ? JSON.parse(savedThreadsRaw) as Record<string, InsightChatThread[]> : {}
-      const savedActive = savedActiveRaw ? JSON.parse(savedActiveRaw) as Record<string, string | null> : {}
-      const activeMessagesByProgram: Record<string, InsightChatMessage[]> = {}
-      Object.entries(savedThreads).forEach(([programId, threads]) => {
-        const activeId = savedActive[programId]
-        const activeThread = threads.find((t) => t.id === activeId) || threads[0]
-        activeMessagesByProgram[programId] = activeThread?.messages || []
-      })
+      const { savedThreads, savedActive, activeMessagesByProgram } = readChatStateFromStorage(wallet)
 
       set({
         _hydrated: true,
@@ -185,19 +218,36 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
   setUser: (user) =>
     set((state) => {
       const updated = { ...state.user, ...user }
+      const walletChanged = updated.wallet !== state.user.wallet
+      let chatPatch = {}
+
+      if (walletChanged) {
+        const { savedThreads, savedActive, activeMessagesByProgram } = readChatStateFromStorage(updated.wallet)
+        chatPatch = {
+          insightChatThreadsByProgram: savedThreads,
+          activeInsightChatThreadByProgram: savedActive,
+          insightChatByProgram: activeMessagesByProgram,
+        }
+      }
+
       if (typeof window !== 'undefined') {
         if (updated.token) localStorage.setItem('pulse_token', updated.token)
         if (updated.wallet) localStorage.setItem('pulse_wallet', updated.wallet)
         if (updated.plan) localStorage.setItem('pulse_plan', updated.plan)
       }
-      return { user: updated }
+      return { user: updated, ...chatPatch }
     }),
   clearUser: () => {
     if (typeof window !== 'undefined') {
+      const wallet = localStorage.getItem('pulse_wallet')
+      const { threadsKey, activeKey } = getChatStorageKeys(wallet)
       localStorage.removeItem('pulse_token')
       localStorage.removeItem('pulse_wallet')
       localStorage.removeItem('pulse_plan')
       localStorage.removeItem('pulse_active_program')
+      localStorage.removeItem(threadsKey)
+      localStorage.removeItem(activeKey)
+      // Remove legacy global chat keys as well.
       localStorage.removeItem(CHAT_THREADS_KEY)
       localStorage.removeItem(CHAT_ACTIVE_KEY)
     }
@@ -263,6 +313,22 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
   insightChatLoadingByProgram: {},
   getInsightChatThreads: (programId) => get().insightChatThreadsByProgram[programId] || [],
   getActiveInsightChatThreadId: (programId) => get().activeInsightChatThreadByProgram[programId] || null,
+  hydrateInsightChatThreads: (programId, threads, activeThreadId = null) =>
+    set((state) => {
+      const safeThreads = Array.isArray(threads) ? threads : []
+      const fallbackActive = safeThreads[0]?.id || null
+      const nextActive = activeThreadId || state.activeInsightChatThreadByProgram[programId] || fallbackActive
+      const activeThread = safeThreads.find((t) => t.id === nextActive) || safeThreads[0]
+
+      const threadsByProgram = { ...state.insightChatThreadsByProgram, [programId]: safeThreads }
+      const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: activeThread?.id || null }
+      persistChatState(threadsByProgram, activeByProgram, state.user.wallet)
+      return {
+        insightChatThreadsByProgram: threadsByProgram,
+        activeInsightChatThreadByProgram: activeByProgram,
+        insightChatByProgram: { ...state.insightChatByProgram, [programId]: activeThread?.messages || [] },
+      }
+    }),
   createInsightChatThread: (programId, title = 'New Chat') => {
     const threadId = generateThreadId()
     const now = new Date().toISOString()
@@ -272,7 +338,7 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       const threads = [newThread, ...existing]
       const threadsByProgram = { ...state.insightChatThreadsByProgram, [programId]: threads }
       const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: threadId }
-      persistChatState(threadsByProgram, activeByProgram)
+      persistChatState(threadsByProgram, activeByProgram, state.user.wallet)
       return {
         insightChatThreadsByProgram: threadsByProgram,
         activeInsightChatThreadByProgram: activeByProgram,
@@ -287,7 +353,7 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       const activeThread = threads.find((t) => t.id === threadId)
       if (!activeThread) return {}
       const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: threadId }
-      persistChatState(state.insightChatThreadsByProgram, activeByProgram)
+      persistChatState(state.insightChatThreadsByProgram, activeByProgram, state.user.wallet)
       return {
         activeInsightChatThreadByProgram: activeByProgram,
         insightChatByProgram: { ...state.insightChatByProgram, [programId]: activeThread.messages || [] },
@@ -323,7 +389,7 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       }
       const threadsByProgram = { ...state.insightChatThreadsByProgram, [programId]: updatedThreads }
       const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: nextActiveId || null }
-      persistChatState(threadsByProgram, activeByProgram)
+      persistChatState(threadsByProgram, activeByProgram, state.user.wallet)
       return {
         insightChatThreadsByProgram: threadsByProgram,
         activeInsightChatThreadByProgram: activeByProgram,
@@ -376,7 +442,7 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       const activeThread = updatedThreads.find((t) => t.id === activeId)
       const threadsByProgram = { ...state.insightChatThreadsByProgram, [programId]: updatedThreads }
       const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: activeId }
-      persistChatState(threadsByProgram, activeByProgram)
+      persistChatState(threadsByProgram, activeByProgram, state.user.wallet)
 
       return {
         insightChatThreadsByProgram: threadsByProgram,

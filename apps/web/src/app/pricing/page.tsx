@@ -11,7 +11,7 @@ const PLANS = [
     features: [
       '1 program tracked',
       '30-day transaction history',
-      'Basic metrics (DAW, retention)',
+      'Basic metrics (DAW)',
       'Email support',
     ],
     cta: 'Get Started',

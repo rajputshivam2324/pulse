@@ -22,6 +22,7 @@ export default function InsightChatPage() {
     insightChatThreadsByProgram,
     activeInsightChatThreadByProgram,
     insightChatLoadingByProgram,
+    hydrateInsightChatThreads,
     createInsightChatThread,
     setActiveInsightChatThread,
     addInsightChatMessage,
@@ -33,6 +34,7 @@ export default function InsightChatPage() {
     insightChatThreadsByProgram: s.insightChatThreadsByProgram,
     activeInsightChatThreadByProgram: s.activeInsightChatThreadByProgram,
     insightChatLoadingByProgram: s.insightChatLoadingByProgram,
+    hydrateInsightChatThreads: s.hydrateInsightChatThreads,
     createInsightChatThread: s.createInsightChatThread,
     setActiveInsightChatThread: s.setActiveInsightChatThread,
     addInsightChatMessage: s.addInsightChatMessage,
@@ -42,6 +44,7 @@ export default function InsightChatPage() {
   const [chatInput, setChatInput] = useState(suggestedQuestion)
   const [suggestions, setSuggestions] = useState<string[]>([])
   const [sidebarOpen, setSidebarOpen] = useState(true)
+  const [bootstrappedFromServer, setBootstrappedFromServer] = useState(false)
   const listRef = useRef<HTMLDivElement | null>(null)
   const threads = useMemo(
     () => (programId ? insightChatThreadsByProgram[programId] || [] : []),
@@ -58,6 +61,75 @@ export default function InsightChatPage() {
   )
   const visibleSuggestions = suggestions.length ? suggestions : baseSuggestions
 
+  const persistMessage = useCallback(async (threadId: string, role: 'user' | 'ai', content: string) => {
+    if (!user.token || !programId) return
+    await fetch(`${API_BASE}/insights/followup_messages/${programId}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${user.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        thread_id: threadId,
+        role,
+        content,
+      }),
+    })
+  }, [programId, user.token])
+
+  const createThreadOnServer = useCallback(async (title = 'New Chat') => {
+    if (!user.token || !programId) return null
+    const res = await fetch(`${API_BASE}/insights/followup_threads/${programId}`, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${user.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ title }),
+    })
+    if (!res.ok) return null
+    const data = await res.json().catch(() => ({}))
+    return (data.thread?.id as string | undefined) || null
+  }, [programId, user.token])
+
+  useEffect(() => {
+    if (!programId || !user.token || bootstrappedFromServer) return
+    let cancelled = false
+
+    const loadThreads = async () => {
+      try {
+        const res = await fetch(`${API_BASE}/insights/followup_threads/${programId}`, {
+          headers: { Authorization: `Bearer ${user.token}` },
+        })
+        if (!res.ok) return
+        const data = await res.json().catch(() => ({}))
+        const fromServer = Array.isArray(data.threads) ? data.threads : []
+        const normalized = fromServer.map((thread: any) => ({
+          id: String(thread.id),
+          title: String(thread.title || 'New Chat'),
+          createdAt: String(thread.created_at || new Date().toISOString()),
+          updatedAt: String(thread.updated_at || thread.created_at || new Date().toISOString()),
+          messages: Array.isArray(thread.messages)
+            ? thread.messages.map((m: any) => ({
+                role: m.role === 'user' ? 'user' : 'ai',
+                content: String(m.content || ''),
+              }))
+            : [],
+        }))
+
+        if (!cancelled && normalized.length) {
+          hydrateInsightChatThreads(programId, normalized, normalized[0].id)
+        }
+      } catch {
+        // non-fatal: local cache still works
+      } finally {
+        if (!cancelled) setBootstrappedFromServer(true)
+      }
+    }
+    void loadThreads()
+    return () => { cancelled = true }
+  }, [bootstrappedFromServer, hydrateInsightChatThreads, programId, user.token])
+
   useEffect(() => {
     listRef.current?.scrollTo({
       top: listRef.current.scrollHeight,
@@ -69,22 +141,52 @@ export default function InsightChatPage() {
     if (!programId) return
     if (threads.length === 0) {
       const initialTitle = suggestedQuestion ? 'Quick follow-up' : 'New Chat'
-      const id = createInsightChatThread(programId, initialTitle)
-      setActiveInsightChatThread(programId, id)
+      const init = async () => {
+        const serverId = await createThreadOnServer(initialTitle)
+        if (serverId) {
+          hydrateInsightChatThreads(programId, [{
+            id: serverId,
+            title: initialTitle,
+            createdAt: new Date().toISOString(),
+            updatedAt: new Date().toISOString(),
+            messages: [],
+          }], serverId)
+        } else {
+          const id = createInsightChatThread(programId, initialTitle)
+          setActiveInsightChatThread(programId, id)
+        }
+      }
+      void init()
       return
     }
     if (!activeThreadId) {
       setActiveInsightChatThread(programId, threads[0].id)
     }
-  }, [activeThreadId, createInsightChatThread, programId, setActiveInsightChatThread, suggestedQuestion, threads])
+  }, [activeThreadId, createInsightChatThread, createThreadOnServer, hydrateInsightChatThreads, programId, setActiveInsightChatThread, suggestedQuestion, threads])
 
   const sendFollowup = useCallback(async (override?: string) => {
     const question = (override ?? chatInput).trim()
     if (!question || !user.token || !programId || chatLoading) return
 
     setChatInput('')
-    if (!activeThread?.id) return
+    let threadId = activeThread?.id || null
+    if (!threadId) {
+      threadId = await createThreadOnServer('Quick follow-up')
+      if (threadId) {
+        hydrateInsightChatThreads(programId, [{
+          id: threadId,
+          title: 'Quick follow-up',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          messages: [],
+        }], threadId)
+      } else {
+        return
+      }
+    }
+
     addInsightChatMessage(programId, { role: 'user', content: question })
+    void persistMessage(threadId, 'user', question)
     setInsightChatLoading(programId, true)
     try {
       const res = await fetch(`${API_BASE}/insights/followup/${programId}`, {
@@ -103,25 +205,43 @@ export default function InsightChatPage() {
         throw new Error(errData.detail || 'Follow-up failed.')
       }
       const data = await res.json()
-      addInsightChatMessage(programId, { role: 'ai', content: data.answer || 'No answer returned.' })
+      const answer = data.answer || 'No answer returned.'
+      addInsightChatMessage(programId, { role: 'ai', content: answer })
+      void persistMessage(threadId, 'ai', answer)
       if (Array.isArray(data.suggested_followups) && data.suggested_followups.length) {
         setSuggestions(data.suggested_followups.slice(0, 4))
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : 'Follow-up failed.'
       addInsightChatMessage(programId, { role: 'ai', content: message })
+      void persistMessage(threadId, 'ai', message)
     } finally {
       setInsightChatLoading(programId, false)
     }
-  }, [activeProgram, activeThread?.id, addInsightChatMessage, chatInput, chatLoading, programId, setInsightChatLoading, user.token])
+  }, [activeProgram, activeThread?.id, addInsightChatMessage, chatInput, chatLoading, createThreadOnServer, hydrateInsightChatThreads, persistMessage, programId, setInsightChatLoading, user.token])
 
   const startNewChat = useCallback(() => {
     if (!programId) return
-    const id = createInsightChatThread(programId, 'New Chat')
-    setActiveInsightChatThread(programId, id)
-    setChatInput('')
-    setSuggestions([])
-  }, [createInsightChatThread, programId, setActiveInsightChatThread])
+    const run = async () => {
+      const serverId = await createThreadOnServer('New Chat')
+      if (serverId) {
+        const newThread = {
+          id: serverId,
+          title: 'New Chat',
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          messages: [],
+        }
+        hydrateInsightChatThreads(programId, [newThread, ...threads], serverId)
+      } else {
+        const id = createInsightChatThread(programId, 'New Chat')
+        setActiveInsightChatThread(programId, id)
+      }
+      setChatInput('')
+      setSuggestions([])
+    }
+    void run()
+  }, [createInsightChatThread, createThreadOnServer, hydrateInsightChatThreads, programId, setActiveInsightChatThread, threads])
 
   return (
     <div className="h-screen relative overflow-hidden flex flex-col">
@@ -160,7 +280,7 @@ export default function InsightChatPage() {
       </header>
 
       <main className="relative z-10 w-full px-0 pt-0 pb-0 flex-1 min-h-0 overflow-hidden">
-        <section className="overflow-hidden rounded-none h-full border-t border-black/10 bg-[linear-gradient(160deg,#c0c0d4_0%,#d8d8ea_8%,#eeeef8_14%,#fafafe_17%,#ffffff_18%,#f4f4fa_19%,#e0e0f0_23%,#c4c4d8_30%,#d8d8ea_38%,#f2f2fa_43%,#ffffff_45%,#f0f0f8_47%,#d4d4e6_53%,#bcbcd0_62%,#d0d0e2_72%,#e8e8f4_80%,#c8c8dc_100%)]">
+        <section className="overflow-hidden rounded-none h-full border-t border-black/10 bg-[linear-gradient(160deg,#c9c9cc_0%,#d4d4d7_10%,#e5e5e8_20%,#f0f0f2_30%,#ffffff_40%,#f5f5f6_52%,#e7e7e9_66%,#d8d8db_80%,#cccccf_100%)]">
           <div className="flex h-full min-h-0">
             <aside
               className={`border-r border-black/12 bg-black/[0.04] p-4 transition-all duration-300 ${

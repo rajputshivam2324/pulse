@@ -16,7 +16,8 @@ import { useWalletModal } from '@solana/wallet-adapter-react-ui'
 
 const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 const TREASURY = process.env.NEXT_PUBLIC_TREASURY_WALLET || ''
-const DEMO_BILLING = process.env.NEXT_PUBLIC_DEMO_BILLING !== 'false'
+// Safe-by-default: demo mode must be explicitly opted in.
+const DEMO_BILLING = process.env.NEXT_PUBLIC_DEMO_BILLING === 'true'
 
 interface UserProfile {
   wallet_pubkey: string

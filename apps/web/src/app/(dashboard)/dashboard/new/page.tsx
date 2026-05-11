@@ -12,6 +12,8 @@ import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { usePulseStore } from '@/store'
+import { PLAN_LIMITS, type PlanType } from '@/lib/plans'
+import { buildUpgradeUrl } from '@/lib/upgrade'
 
 const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 
@@ -39,6 +41,26 @@ export default function AddProgramPage() {
       if (!token) {
         throw new Error('Session expired. Please reconnect your wallet.')
       }
+
+      // Soft-gate: if user is already at program limit, send them to upgrade.
+      // Server will also enforce this in /api/programs.
+      try {
+        const planKey = (user.plan as PlanType) || 'free'
+        const plan = PLAN_LIMITS[planKey] || PLAN_LIMITS.free
+        if (plan.max_programs !== -1) {
+          const listRes = await fetch('/api/programs', {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+          if (listRes.ok) {
+            const list = await listRes.json().catch(() => ({}))
+            const count = Array.isArray(list.programs) ? list.programs.length : 0
+            if (count >= plan.max_programs) {
+              router.push(buildUpgradeUrl('/dashboard/new'))
+              return
+            }
+          }
+        }
+      } catch { /* non-fatal */ }
 
       // Step 1: Register program
       const registerRes = await fetch('/api/programs', {

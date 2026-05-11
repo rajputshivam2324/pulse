@@ -5,6 +5,7 @@ All endpoints require JWT authentication.
 """
 
 import asyncio
+from datetime import datetime, timezone
 import logging
 import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -23,7 +24,7 @@ router = APIRouter(prefix="/insights", tags=["insights"])
 logger = logging.getLogger(__name__)
 
 # Plan-gated features
-AI_INIGHTS_PLANS = {"team", "protocol"}
+AI_INSIGHTS_PLANS = {"team", "protocol"}
 INSIGHT_PIPELINE_TIMEOUT_SECONDS = float(os.getenv("INSIGHT_PIPELINE_TIMEOUT_SECONDS", "25"))
 
 
@@ -39,10 +40,29 @@ async def _check_plan_feature(wallet: str, feature: str) -> bool:
         if not result.data:
             return False
         plan = result.data[0].get("plan", "free")
-        return plan in AI_INIGHTS_PLANS
+        return plan in AI_INSIGHTS_PLANS
     except Exception:
         logger.warning("Plan check failed, defaulting to deny", extra={"wallet": wallet})
         return False
+
+
+def _resolve_user_and_program(wallet: str, program_id: str):
+    """Resolve authenticated wallet to primary user and owned program row."""
+    supabase = get_supabase()
+    user_id = resolve_wallet_to_user_id(wallet)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not found.")
+
+    program_row = (
+        supabase.table("programs")
+        .select("id, user_id")
+        .eq("program_address", program_id)
+        .eq("user_id", user_id)
+        .execute()
+    )
+    if not program_row.data:
+        raise HTTPException(status_code=403, detail="You do not own this program.")
+    return supabase, user_id, program_row.data[0]
 
 
 def _num(value, fallback=0):
@@ -206,7 +226,7 @@ async def generate_insights(
     if not has_access:
         raise HTTPException(
             status_code=403,
-            detail="AI Insights require a Team or Protocol plan. Upgrade at /settings.",
+            detail="AI Insights require a Team or Protocol plan. Upgrade at /account.",
         )
 
     metrics = await cache_get(metrics_cache_key(program_id))
@@ -332,7 +352,7 @@ async def get_insights(program_id: str, wallet: str = Depends(require_auth)):
     if not has_access:
         raise HTTPException(
             status_code=403,
-            detail="AI Insights require a Team or Protocol plan. Upgrade at /settings.",
+            detail="AI Insights require a Team or Protocol plan. Upgrade at /account.",
         )
 
     insights = await cache_get(insights_cache_key(program_id))
@@ -379,8 +399,8 @@ async def get_insight_history(
         )
         return {"reports": result.data or []}
     except Exception as e:
-        logger.warning("Failed to fetch insight history: %s", str(e))
-        return {"reports": []}
+        logger.error("Failed to fetch insight history: %s", str(e), extra={"program_id": program_id, "user_id": user_id})
+        raise HTTPException(status_code=500, detail="Failed to fetch insight history")
 
 
 @router.post("/followup/{program_id}")
@@ -444,6 +464,153 @@ async def followup_question(
     )
 
 
+@router.get("/followup_threads/{program_id}")
+async def get_followup_threads(program_id: str, wallet: str = Depends(require_auth)):
+    """Return persisted follow-up chat threads/messages for user+program."""
+    if not is_valid_solana_address(program_id):
+        raise HTTPException(status_code=400, detail="Invalid Solana address format")
+
+    supabase, user_id, program = _resolve_user_and_program(wallet, program_id)
+    try:
+        threads_res = (
+            supabase.table("insight_chat_threads")
+            .select("id, title, created_at, updated_at")
+            .eq("user_id", user_id)
+            .eq("program_id", program["id"])
+            .order("updated_at", desc=True)
+            .execute()
+        )
+        threads = threads_res.data or []
+        if not threads:
+            return {"threads": []}
+
+        thread_ids = [t["id"] for t in threads]
+        messages_res = (
+            supabase.table("insight_chat_messages")
+            .select("thread_id, role, content, created_at")
+            .in_("thread_id", thread_ids)
+            .order("created_at", desc=False)
+            .execute()
+        )
+        by_thread = {}
+        for msg in (messages_res.data or []):
+            tid = msg.get("thread_id")
+            if tid not in by_thread:
+                by_thread[tid] = []
+            by_thread[tid].append({
+                "role": msg.get("role", "ai"),
+                "content": msg.get("content", ""),
+                "created_at": msg.get("created_at"),
+            })
+
+        out = []
+        for t in threads:
+            out.append({
+                "id": t.get("id"),
+                "title": t.get("title") or "New Chat",
+                "created_at": t.get("created_at"),
+                "updated_at": t.get("updated_at"),
+                "messages": by_thread.get(t.get("id"), []),
+            })
+        return {"threads": out}
+    except Exception as e:
+        logger.error("Failed to load follow-up threads: %s", str(e), extra={"program_id": program_id, "user_id": user_id})
+        raise HTTPException(status_code=500, detail="Failed to load follow-up threads")
+
+
+@router.post("/followup_threads/{program_id}")
+async def create_followup_thread(
+    request: Request,
+    program_id: str,
+    wallet: str = Depends(require_auth),
+):
+    """Create a new persisted follow-up chat thread."""
+    if not is_valid_solana_address(program_id):
+        raise HTTPException(status_code=400, detail="Invalid Solana address format")
+
+    supabase, user_id, program = _resolve_user_and_program(wallet, program_id)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    title = str(body.get("title", "New Chat")).strip() or "New Chat"
+    if len(title) > 120:
+        title = title[:120]
+
+    try:
+        res = (
+            supabase.table("insight_chat_threads")
+            .insert({
+                "user_id": user_id,
+                "program_id": program["id"],
+                "title": title,
+            })
+            .select("id, title, created_at, updated_at")
+            .single()
+            .execute()
+        )
+        return {"thread": res.data}
+    except Exception as e:
+        logger.error("Failed to create follow-up thread: %s", str(e))
+        raise HTTPException(status_code=500, detail="Failed to create thread")
+
+
+@router.post("/followup_messages/{program_id}")
+async def append_followup_message(
+    request: Request,
+    program_id: str,
+    wallet: str = Depends(require_auth),
+):
+    """Persist one follow-up chat message into a thread."""
+    if not is_valid_solana_address(program_id):
+        raise HTTPException(status_code=400, detail="Invalid Solana address format")
+
+    supabase, user_id, program = _resolve_user_and_program(wallet, program_id)
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    thread_id = str(body.get("thread_id", "")).strip()
+    role = str(body.get("role", "")).strip().lower()
+    content = str(body.get("content", "")).strip()
+
+    if not thread_id:
+        raise HTTPException(status_code=400, detail="thread_id is required.")
+    if role not in {"user", "ai"}:
+        raise HTTPException(status_code=400, detail="role must be 'user' or 'ai'.")
+    if not content:
+        raise HTTPException(status_code=400, detail="content is required.")
+
+    # Verify thread ownership by user+program.
+    thread_res = (
+        supabase.table("insight_chat_threads")
+        .select("id, user_id, program_id")
+        .eq("id", thread_id)
+        .eq("user_id", user_id)
+        .eq("program_id", program["id"])
+        .maybe_single()
+        .execute()
+    )
+    if not thread_res.data:
+        raise HTTPException(status_code=403, detail="Invalid thread for this program.")
+
+    try:
+        supabase.table("insight_chat_messages").insert({
+            "thread_id": thread_id,
+            "role": role,
+            "content": content,
+        }).execute()
+        supabase.table("insight_chat_threads").update({
+            "updated_at": datetime.now(timezone.utc).isoformat(),
+        }).eq("id", thread_id).execute()
+        return {"status": "ok"}
+    except Exception as e:
+        logger.error("Failed to persist follow-up message: %s", str(e))
+        raise HTTPException(status_code=500, detail="Failed to persist message")
+
+
 @router.post("/generate_stream/{program_id}")
 @limiter.limit("5/hour")
 async def generate_insights_stream(
@@ -488,7 +655,7 @@ async def generate_insights_stream(
     if not has_access:
         raise HTTPException(
             status_code=403,
-            detail="AI Insights require a Team or Protocol plan. Upgrade at /settings.",
+            detail="AI Insights require a Team or Protocol plan. Upgrade at /account.",
         )
 
     metrics = await cache_get(metrics_cache_key(program_id))

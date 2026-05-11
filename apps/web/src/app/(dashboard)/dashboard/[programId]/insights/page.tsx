@@ -4,6 +4,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { useParams, useRouter, useSearchParams } from 'next/navigation'
 import { usePulseStore } from '@/store'
 import { canAccess } from '@/lib/plans'
+import { buildUpgradeUrl } from '@/lib/upgrade'
 import { useShallow } from 'zustand/react/shallow'
 import {
   healthGrade,
@@ -344,7 +345,12 @@ export default function AIInsightsPage() {
 
       if (!streamRes.ok) {
         const errData = await streamRes.json().catch(() => ({}))
-        throw new Error(errData.detail || errData.error || 'Failed to start streaming insights.')
+        const detail = String(errData.detail || errData.error || '')
+        if (streamRes.status === 403 || detail.toLowerCase().includes('upgrade')) {
+          setError('locked')
+          return
+        }
+        throw new Error(detail || 'Failed to start streaming insights.')
       }
 
       await consumeSseResponse(
@@ -368,7 +374,6 @@ export default function AIInsightsPage() {
             const report = (data.report || null) as AnyRecord | null
             if (!report) return
             const normalizedReport: Record<string, unknown> & { insights: Record<string, unknown>[] } = {
-              insights: [],
               ...report,
               insights: Array.isArray(report.insights) ? (report.insights as Record<string, unknown>[]) : [],
             }
@@ -404,6 +409,10 @@ export default function AIInsightsPage() {
         void fetchHistory()
         return
       }
+      if (res.status === 403) {
+        setError('locked')
+        return
+      }
       if (res.status === 404) {
         await handleGenerateInsights()
         return
@@ -418,12 +427,6 @@ export default function AIInsightsPage() {
   function handleChipClick(question: string) {
     router.push(`/dashboard/${programId}/insights/chat?q=${encodeURIComponent(question)}`)
   }
-
-  useEffect(() => {
-    if (!hasAccess && !isGeneratingInsights && !insights && !error) {
-      router.push(`/dashboard/${programId}`)
-    }
-  }, [error, hasAccess, insights, isGeneratingInsights, programId, router])
 
   useEffect(() => {
     if (hasAccess && !metrics && user.token && programId) {
@@ -498,6 +501,37 @@ export default function AIInsightsPage() {
       </span>
     </header>
   )
+
+  if (!hasAccess || error === 'locked') {
+    const returnTo = `/dashboard/${programId}/insights`
+    return (
+      <div className="min-h-screen relative overflow-hidden">
+        {headerElement}
+        <div className="flex items-center justify-center min-h-screen px-6 pt-24 pb-20">
+          <div className="plate p-10 max-w-xl w-full text-center">
+            <div className="w-16 h-16 rounded-full bg-black/5 flex items-center justify-center mx-auto mb-4 border border-black/10">
+              <span className="text-2xl">🔒</span>
+            </div>
+            <h2 className="text-xl f1-h font-bold mb-2 text-black/80 uppercase">AI Insights Locked</h2>
+            <p className="text-black/60 text-xs f1-m uppercase tracking-widest mb-6">
+              Upgrade to Team or Protocol to generate AI intelligence reports and follow-up chat.
+            </p>
+            <div className="flex flex-col sm:flex-row gap-3 justify-center">
+              <button onClick={() => router.push(buildUpgradeUrl(returnTo))} className="btn-hero">
+                <span className="btn-label">Upgrade in Account</span>
+              </button>
+              <button onClick={() => router.push(`/dashboard/${programId}`)} className="btn-ghost">
+                <span className="btn-label">Back to Dashboard</span>
+              </button>
+            </div>
+            <p className="mt-5 text-[9px] f1-m uppercase tracking-widest text-black/35">
+              After upgrading, return here to run AI Insights.
+            </p>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (error && !insights) {
     return (

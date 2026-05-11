@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { jwtVerify } from 'jose'
+import { PLAN_LIMITS, type PlanType } from '@/lib/plans'
 
 /**
  * Programs API — Register and list Solana programs for a user.
@@ -171,6 +172,41 @@ export async function POST(req: NextRequest) {
         return NextResponse.json({ error: 'Failed to create user record' }, { status: 500 })
       }
       userId = (userData as unknown as { id: string }).id
+    }
+
+    // Enforce max_programs per plan (server-side source of truth).
+    // Note: do NOT rely on the JWT plan claim; always read from DB.
+    const { data: userRow, error: userRowErr } = await supabase
+      .from('users')
+      .select('plan')
+      .eq('id', userId)
+      .maybeSingle()
+    if (userRowErr) {
+      console.error('Failed to load user plan:', userRowErr)
+      return NextResponse.json({ error: 'Failed to validate plan' }, { status: 500 })
+    }
+
+    const planKey = ((userRow as { plan?: string } | null)?.plan || 'free') as PlanType
+    const limits = PLAN_LIMITS[planKey] || PLAN_LIMITS.free
+    if (limits.max_programs !== -1) {
+      const { count, error: countErr } = await supabase
+        .from('programs')
+        .select('id', { count: 'exact', head: true })
+        .eq('user_id', userId)
+      if (countErr) {
+        console.error('Failed to count programs:', countErr)
+        return NextResponse.json({ error: 'Failed to validate plan limits' }, { status: 500 })
+      }
+      if ((count || 0) >= limits.max_programs) {
+        return NextResponse.json(
+          {
+            error: `Program limit reached for your plan (${limits.max_programs}). Upgrade to add more programs.`,
+            code: 'PLAN_LIMIT_REACHED',
+            limit: limits.max_programs,
+          },
+          { status: 403 }
+        )
+      }
     }
 
     // Upsert program row (idempotent — safe to call multiple times)
