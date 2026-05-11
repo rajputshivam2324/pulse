@@ -55,6 +55,41 @@ export interface InsightChatMessage {
   content: string
 }
 
+export interface InsightChatThread {
+  id: string
+  title: string
+  createdAt: string
+  updatedAt: string
+  messages: InsightChatMessage[]
+}
+
+const CHAT_THREADS_KEY = 'pulse_insight_chat_threads'
+const CHAT_ACTIVE_KEY = 'pulse_insight_chat_active_thread'
+
+function generateThreadId(): string {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID()
+  }
+  return `thread_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`
+}
+
+function deriveThreadTitle(messages: InsightChatMessage[]): string {
+  const firstUser = messages.find((m) => m.role === 'user')
+  if (!firstUser) return 'New Chat'
+  const trimmed = firstUser.content.trim()
+  if (!trimmed) return 'New Chat'
+  return trimmed.length > 44 ? `${trimmed.slice(0, 44)}...` : trimmed
+}
+
+function persistChatState(
+  threadsByProgram: Record<string, InsightChatThread[]>,
+  activeByProgram: Record<string, string | null>
+) {
+  if (typeof window === 'undefined') return
+  localStorage.setItem(CHAT_THREADS_KEY, JSON.stringify(threadsByProgram))
+  localStorage.setItem(CHAT_ACTIVE_KEY, JSON.stringify(activeByProgram))
+}
+
 interface PulseStore {
   // Hydration
   _hydrated: boolean
@@ -87,8 +122,14 @@ interface PulseStore {
   clearInsights: (programId: string) => void
 
   // Follow-up chat — keyed by programId
+  insightChatThreadsByProgram: Record<string, InsightChatThread[]>
+  activeInsightChatThreadByProgram: Record<string, string | null>
   insightChatByProgram: Record<string, InsightChatMessage[]>
   insightChatLoadingByProgram: Record<string, boolean>
+  getInsightChatThreads: (programId: string) => InsightChatThread[]
+  getActiveInsightChatThreadId: (programId: string) => string | null
+  createInsightChatThread: (programId: string, title?: string) => string
+  setActiveInsightChatThread: (programId: string, threadId: string) => void
   getInsightChat: (programId: string) => InsightChatMessage[]
   setInsightChat: (programId: string, messages: InsightChatMessage[]) => void
   addInsightChatMessage: (programId: string, message: InsightChatMessage) => void
@@ -111,11 +152,24 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       const wallet = localStorage.getItem('pulse_wallet')
       const plan = localStorage.getItem('pulse_plan') || 'free'
       const savedProgram = localStorage.getItem('pulse_active_program')
+      const savedThreadsRaw = localStorage.getItem(CHAT_THREADS_KEY)
+      const savedActiveRaw = localStorage.getItem(CHAT_ACTIVE_KEY)
+      const savedThreads = savedThreadsRaw ? JSON.parse(savedThreadsRaw) as Record<string, InsightChatThread[]> : {}
+      const savedActive = savedActiveRaw ? JSON.parse(savedActiveRaw) as Record<string, string | null> : {}
+      const activeMessagesByProgram: Record<string, InsightChatMessage[]> = {}
+      Object.entries(savedThreads).forEach(([programId, threads]) => {
+        const activeId = savedActive[programId]
+        const activeThread = threads.find((t) => t.id === activeId) || threads[0]
+        activeMessagesByProgram[programId] = activeThread?.messages || []
+      })
 
       set({
         _hydrated: true,
         user: { wallet: wallet || null, plan, token: token || null },
         activeProgram: savedProgram ? JSON.parse(savedProgram) : null,
+        insightChatThreadsByProgram: savedThreads,
+        activeInsightChatThreadByProgram: savedActive,
+        insightChatByProgram: activeMessagesByProgram,
       })
     } catch {
       set({ _hydrated: true })
@@ -144,6 +198,8 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       localStorage.removeItem('pulse_wallet')
       localStorage.removeItem('pulse_plan')
       localStorage.removeItem('pulse_active_program')
+      localStorage.removeItem(CHAT_THREADS_KEY)
+      localStorage.removeItem(CHAT_ACTIVE_KEY)
     }
     set({
       user: { wallet: null, plan: 'free', token: null },
@@ -151,6 +207,8 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
       programs: [],
       metricsByProgram: {},
       insightsByProgram: {},
+      insightChatThreadsByProgram: {},
+      activeInsightChatThreadByProgram: {},
       insightChatByProgram: {},
       insightChatLoadingByProgram: {},
     })
@@ -199,20 +257,133 @@ export const usePulseStore = create<PulseStore>((set, get) => ({
     }),
 
   // Follow-up chat
+  insightChatThreadsByProgram: {},
+  activeInsightChatThreadByProgram: {},
   insightChatByProgram: {},
   insightChatLoadingByProgram: {},
-  getInsightChat: (programId) => get().insightChatByProgram[programId] || [],
+  getInsightChatThreads: (programId) => get().insightChatThreadsByProgram[programId] || [],
+  getActiveInsightChatThreadId: (programId) => get().activeInsightChatThreadByProgram[programId] || null,
+  createInsightChatThread: (programId, title = 'New Chat') => {
+    const threadId = generateThreadId()
+    const now = new Date().toISOString()
+    set((state) => {
+      const existing = state.insightChatThreadsByProgram[programId] || []
+      const newThread: InsightChatThread = { id: threadId, title, createdAt: now, updatedAt: now, messages: [] }
+      const threads = [newThread, ...existing]
+      const threadsByProgram = { ...state.insightChatThreadsByProgram, [programId]: threads }
+      const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: threadId }
+      persistChatState(threadsByProgram, activeByProgram)
+      return {
+        insightChatThreadsByProgram: threadsByProgram,
+        activeInsightChatThreadByProgram: activeByProgram,
+        insightChatByProgram: { ...state.insightChatByProgram, [programId]: [] },
+      }
+    })
+    return threadId
+  },
+  setActiveInsightChatThread: (programId, threadId) =>
+    set((state) => {
+      const threads = state.insightChatThreadsByProgram[programId] || []
+      const activeThread = threads.find((t) => t.id === threadId)
+      if (!activeThread) return {}
+      const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: threadId }
+      persistChatState(state.insightChatThreadsByProgram, activeByProgram)
+      return {
+        activeInsightChatThreadByProgram: activeByProgram,
+        insightChatByProgram: { ...state.insightChatByProgram, [programId]: activeThread.messages || [] },
+      }
+    }),
+  getInsightChat: (programId) => {
+    const state = get()
+    const activeId = state.activeInsightChatThreadByProgram[programId]
+    const threads = state.insightChatThreadsByProgram[programId] || []
+    if (activeId) {
+      const active = threads.find((t) => t.id === activeId)
+      if (active) return active.messages
+    }
+    if (threads[0]) return threads[0].messages
+    return state.insightChatByProgram[programId] || []
+  },
   setInsightChat: (programId, messages) =>
-    set((state) => ({
-      insightChatByProgram: { ...state.insightChatByProgram, [programId]: messages },
-    })),
+    set((state) => {
+      const threads = state.insightChatThreadsByProgram[programId] || []
+      const activeId = state.activeInsightChatThreadByProgram[programId]
+      const now = new Date().toISOString()
+      let updatedThreads = threads
+      let nextActiveId = activeId
+      if (activeId && threads.some((t) => t.id === activeId)) {
+        updatedThreads = threads.map((t) => (t.id === activeId
+          ? { ...t, messages, updatedAt: now, title: deriveThreadTitle(messages) }
+          : t
+        ))
+      } else {
+        const id = generateThreadId()
+        nextActiveId = id
+        updatedThreads = [{ id, title: deriveThreadTitle(messages), createdAt: now, updatedAt: now, messages }, ...threads]
+      }
+      const threadsByProgram = { ...state.insightChatThreadsByProgram, [programId]: updatedThreads }
+      const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: nextActiveId || null }
+      persistChatState(threadsByProgram, activeByProgram)
+      return {
+        insightChatThreadsByProgram: threadsByProgram,
+        activeInsightChatThreadByProgram: activeByProgram,
+        insightChatByProgram: { ...state.insightChatByProgram, [programId]: messages },
+      }
+    }),
   addInsightChatMessage: (programId, message) =>
-    set((state) => ({
-      insightChatByProgram: {
-        ...state.insightChatByProgram,
-        [programId]: [...(state.insightChatByProgram[programId] || []), message],
-      },
-    })),
+    set((state) => {
+      const existingThreads = state.insightChatThreadsByProgram[programId] || []
+      const currentActiveId = state.activeInsightChatThreadByProgram[programId]
+      const fallbackMessages = state.insightChatByProgram[programId] || []
+
+      let activeId = currentActiveId
+      let threads = existingThreads
+      if (!activeId || !threads.some((t) => t.id === activeId)) {
+        const now = new Date().toISOString()
+        const migratedThread: InsightChatThread = {
+          id: generateThreadId(),
+          title: deriveThreadTitle(fallbackMessages),
+          createdAt: now,
+          updatedAt: now,
+          messages: fallbackMessages,
+        }
+        threads = fallbackMessages.length > 0 ? [migratedThread, ...threads] : threads
+        if (!threads.length) {
+          const newThread: InsightChatThread = {
+            id: generateThreadId(),
+            title: 'New Chat',
+            createdAt: now,
+            updatedAt: now,
+            messages: [],
+          }
+          threads = [newThread]
+        }
+        activeId = threads[0].id
+      }
+
+      const now = new Date().toISOString()
+      const updatedThreads = threads.map((thread) => {
+        if (thread.id !== activeId) return thread
+        const nextMessages = [...thread.messages, message]
+        return {
+          ...thread,
+          messages: nextMessages,
+          updatedAt: now,
+          title: deriveThreadTitle(nextMessages),
+        }
+      }).sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
+
+      const activeThread = updatedThreads.find((t) => t.id === activeId)
+      const threadsByProgram = { ...state.insightChatThreadsByProgram, [programId]: updatedThreads }
+      const activeByProgram = { ...state.activeInsightChatThreadByProgram, [programId]: activeId }
+      persistChatState(threadsByProgram, activeByProgram)
+
+      return {
+        insightChatThreadsByProgram: threadsByProgram,
+        activeInsightChatThreadByProgram: activeByProgram,
+        insightChatByProgram: { ...state.insightChatByProgram, [programId]: activeThread?.messages || [] },
+      }
+    }),
   setInsightChatLoading: (programId, loading) =>
     set((state) => ({
       insightChatLoadingByProgram: {

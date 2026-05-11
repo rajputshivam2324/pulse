@@ -79,14 +79,20 @@ export function HealthScore({ score }: { score: number }) {
 }
 
 /* ── DAW Chart ── */
-export function DAWChart({ data }: { data: Array<{ date: string; daw: number; new_wallets: number; returning_wallets: number }> }) {
+export function DAWChart({
+  data,
+  rangeLabel = '30D',
+}: {
+  data: Array<{ date: string; daw: number; new_wallets: number; returning_wallets: number }>
+  rangeLabel?: string
+}) {
   const latest = data[data.length - 1]
   const returningShare = latest && latest.daw > 0 ? Math.round((latest.returning_wallets / latest.daw) * 100) : 0
 
   return (
     <div className="plate p-5">
       <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
-        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">DAW Timeline (30d)</h3>
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">DAW Timeline ({rangeLabel})</h3>
         <div className="flex items-center gap-4 text-[10px] f1-m font-bold uppercase tracking-widest text-black/60">
           <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-[#555]" />New</span>
           <span className="flex items-center gap-1.5"><span className="w-2 h-2 rounded-sm bg-[#999]" />Return</span>
@@ -123,12 +129,18 @@ export function DAWChart({ data }: { data: Array<{ date: string; daw: number; ne
 }
 
 /* ── Funnel Chart ── */
-export function FunnelChart({ data }: { data: Array<{ step: number; label: string; wallet_count: number; drop_off_rate: number }> }) {
+export function FunnelChart({
+  data,
+  rangeLabel = '30D',
+}: {
+  data: Array<{ step: number; label: string; wallet_count: number; drop_off_rate: number }>
+  rangeLabel?: string
+}) {
   const firstCount = data[0]?.wallet_count || 1
   return (
     <div className="plate p-5">
       <div className="flex items-center justify-between mb-4 border-b border-black/20 pb-3">
-        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Funnel Drop-off</h3>
+        <h3 className="f1-m text-[10px] font-bold uppercase tracking-widest text-black/80">Funnel Drop-off ({rangeLabel})</h3>
         <div className="flex gap-1.5 flex-wrap">
           {data.slice(1).map((s) => (
             <span key={s.step} className="tag" style={{ background: s.drop_off_rate > 50 ? 'rgba(220,38,38,0.12)' : 'rgba(0,0,0,0.06)', color: s.drop_off_rate > 50 ? '#dc2626' : '#444', border: `1px solid ${s.drop_off_rate > 50 ? 'rgba(220,38,38,0.3)' : 'rgba(0,0,0,0.1)'}` }}>

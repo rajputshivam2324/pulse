@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import { Rajdhani, JetBrains_Mono } from 'next/font/google'
+import 'katex/dist/katex.min.css'
 import './globals.css'
 import { SolanaWalletProvider } from '@/components/wallet/WalletProvider'
 import { StoreHydrator } from '@/components/StoreHydrator'
