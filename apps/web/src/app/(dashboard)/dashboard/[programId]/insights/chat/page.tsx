@@ -6,7 +6,14 @@ import { usePulseStore } from '@/store'
 import { useShallow } from 'zustand/react/shallow'
 import { FormattedMessage } from '@/components/chat/FormattedMessage'
 
-const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
+// Same-origin proxy (next.config.ts rewrites `/api/pulse/*` → FastAPI) avoids
+// browser `Failed to fetch` from CORS, wrong host, or API only bound to localhost.
+function insightApiBase(): string {
+  if (typeof window !== "undefined") {
+    return `${window.location.origin}/api/pulse`
+  }
+  return process.env.NEXT_PUBLIC_FASTAPI_URL || "http://127.0.0.1:8000"
+}
 
 export default function InsightChatPage() {
   const params = useParams()
@@ -63,33 +70,45 @@ export default function InsightChatPage() {
 
   const persistMessage = useCallback(async (threadId: string, role: 'user' | 'ai', content: string) => {
     if (!user.token || !programId) return
-    await fetch(`${API_BASE}/insights/followup_messages/${programId}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${user.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({
-        thread_id: threadId,
-        role,
-        content,
-      }),
-    })
+    try {
+      const res = await fetch(`${insightApiBase()}/insights/followup_messages/${programId}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${user.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          thread_id: threadId,
+          role,
+          content,
+        }),
+      })
+      if (!res.ok) {
+        console.warn('Follow-up persist failed:', res.status, await res.text().catch(() => ''))
+      }
+    } catch (e) {
+      // Never reject — callers use void persistMessage(); avoids unhandledRejection.
+      console.warn('Follow-up persist network error:', e)
+    }
   }, [programId, user.token])
 
   const createThreadOnServer = useCallback(async (title = 'New Chat') => {
     if (!user.token || !programId) return null
-    const res = await fetch(`${API_BASE}/insights/followup_threads/${programId}`, {
-      method: 'POST',
-      headers: {
-        Authorization: `Bearer ${user.token}`,
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify({ title }),
-    })
-    if (!res.ok) return null
-    const data = await res.json().catch(() => ({}))
-    return (data.thread?.id as string | undefined) || null
+    try {
+      const res = await fetch(`${insightApiBase()}/insights/followup_threads/${programId}`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${user.token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ title }),
+      })
+      if (!res.ok) return null
+      const data = await res.json().catch(() => ({}))
+      return (data.thread?.id as string | undefined) || null
+    } catch {
+      return null
+    }
   }, [programId, user.token])
 
   useEffect(() => {
@@ -98,7 +117,7 @@ export default function InsightChatPage() {
 
     const loadThreads = async () => {
       try {
-        const res = await fetch(`${API_BASE}/insights/followup_threads/${programId}`, {
+        const res = await fetch(`${insightApiBase()}/insights/followup_threads/${programId}`, {
           headers: { Authorization: `Bearer ${user.token}` },
         })
         if (!res.ok) return
@@ -189,7 +208,7 @@ export default function InsightChatPage() {
     void persistMessage(threadId, 'user', question)
     setInsightChatLoading(programId, true)
     try {
-      const res = await fetch(`${API_BASE}/insights/followup/${programId}`, {
+      const res = await fetch(`${insightApiBase()}/insights/followup/${programId}`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${user.token}`,
@@ -244,7 +263,7 @@ export default function InsightChatPage() {
   }, [createInsightChatThread, createThreadOnServer, hydrateInsightChatThreads, programId, setActiveInsightChatThread, threads])
 
   return (
-    <div className="h-screen relative overflow-hidden flex flex-col">
+    <div className="h-screen min-h-0 relative overflow-hidden flex flex-col w-full max-w-full">
       <header className="sticky top-0 z-50 machined-panel px-6 py-3 flex items-center justify-between">
         <div className="flex items-center gap-4 min-w-0">
           <button
@@ -279,12 +298,12 @@ export default function InsightChatPage() {
         </div>
       </header>
 
-      <main className="relative z-10 w-full px-0 pt-0 pb-0 flex-1 min-h-0 overflow-hidden">
-        <section className="overflow-hidden rounded-none h-full border-t border-black/10 bg-[linear-gradient(160deg,#c9c9cc_0%,#d4d4d7_10%,#e5e5e8_20%,#f0f0f2_30%,#ffffff_40%,#f5f5f6_52%,#e7e7e9_66%,#d8d8db_80%,#cccccf_100%)]">
-          <div className="flex h-full min-h-0">
+      <main className="relative z-10 w-full min-w-0 max-w-full px-0 pt-0 pb-0 flex-1 min-h-0 overflow-hidden">
+        <section className="overflow-hidden rounded-none h-full min-h-0 min-w-0 border-t border-black/10 bg-[linear-gradient(160deg,#c9c9cc_0%,#d4d4d7_10%,#e5e5e8_20%,#f0f0f2_30%,#ffffff_40%,#f5f5f6_52%,#e7e7e9_66%,#d8d8db_80%,#cccccf_100%)]">
+          <div className="flex h-full min-h-0 min-w-0">
             <aside
-              className={`border-r border-black/12 bg-black/[0.04] p-4 transition-all duration-300 ${
-                sidebarOpen ? 'w-[280px] opacity-100' : 'w-0 opacity-0 p-0 border-r-0 overflow-hidden'
+              className={`border-r border-black/12 bg-black/[0.04] p-4 shrink-0 min-h-0 min-w-0 transition-all duration-300 ${
+                sidebarOpen ? 'w-[280px] max-w-[280px] opacity-100' : 'w-0 opacity-0 p-0 border-r-0 overflow-hidden'
               }`}
             >
               <div className="flex items-center justify-between mb-3">
@@ -310,7 +329,7 @@ export default function InsightChatPage() {
               </div>
             </aside>
 
-            <div className="flex-1 flex flex-col h-full min-h-0 bg-gradient-to-b from-white/10 to-white/5">
+            <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 overflow-hidden bg-gradient-to-b from-white/10 to-white/5">
               <div className="border-b border-black/10 px-5 py-4 md:px-6 md:py-5 bg-black/[0.02] flex items-center justify-between">
                 <div>
                   <p className="text-[10px] f1-m uppercase tracking-widest text-black/45">
@@ -337,13 +356,13 @@ export default function InsightChatPage() {
                   </div>
                 )}
                 {chatMessages.map((message, idx) => (
-                  <div key={`${message.role}-${idx}`} className={`flex items-start gap-3 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                  <div key={`${message.role}-${idx}`} className={`flex items-start gap-3 min-w-0 ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                     {message.role !== 'user' && (
                       <div className="w-7 h-7 rounded-sm border border-black/15 bg-white/50 flex items-center justify-center text-[9px] f1-h font-bold text-black/65 shrink-0 mt-1">
                         AI
                       </div>
                     )}
-                    <div className={`w-full max-w-[72%] rounded-xl border px-4 py-3 shadow-[0_2px_8px_rgba(0,0,0,0.08)] ${
+                    <div className={`min-w-0 max-w-[min(72%,100%)] basis-auto rounded-xl border px-4 py-3 shadow-[0_2px_8px_rgba(0,0,0,0.08)] ${
                       message.role === 'user'
                         ? 'bg-black text-white border-black/80'
                         : 'bg-white/55 border-black/10 text-black/70'
