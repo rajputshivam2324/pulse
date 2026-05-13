@@ -7,6 +7,7 @@ Each function represents one node in the graph.
 import json
 import logging
 import os
+import asyncio
 from langchain_nvidia_ai_endpoints import ChatNVIDIA
 from langgraph.config import get_stream_writer
 from .prompts import (
@@ -252,7 +253,7 @@ async def anomaly_ranker_node(state: InsightPipelineState) -> dict:
 async def insight_generator_node(state: InsightPipelineState) -> dict:
     """
     Node 3: For each top anomaly, generate a structured insight.
-    Run sequentially for top 4 anomalies only — avoid over-generation.
+    Up to 4 anomalies — LLM calls run concurrently to reduce wall-clock latency.
     """
     writer = get_stream_writer()
     writer({"status": "Generating insight cards..."})
@@ -263,7 +264,7 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
         state["metrics_payload"].get("summary", {}), separators=(",", ":"), ensure_ascii=False
     )
 
-    insights = []
+    insights: list[dict] = []
     try:
         chain = INSIGHT_GENERATION_PROMPT | _get_model()
     except Exception as e:
@@ -284,9 +285,11 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
         trace.append(f"insight_generator: generated {len(insights)} insights (fallback)")
         return {"raw_insights": insights, "execution_trace": trace}
 
-    for i, anomaly in enumerate(top_anomalies):
+    total = len(top_anomalies)
+
+    async def _one(i: int, anomaly: dict) -> tuple[int, dict]:
         try:
-            writer({"status": f"Drafting insight {i + 1}/{len(top_anomalies)}..."})
+            writer({"status": f"Drafting insight {i + 1}/{total}..."})
             response = await _invoke_with_fallback(
                 chain,
                 {
@@ -294,16 +297,13 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
                     "anomaly_json": json.dumps(anomaly, separators=(",", ":"), ensure_ascii=False),
                     "metrics_summary_json": metrics_summary,
                     "index": i + 1,
-                }
+                },
             )
             insight = safe_parse_json(response.content)
-            insights.append(insight)
-            # Stream the card immediately so the UI can render progressively.
-            writer({"insight": insight, "index": i + 1, "total": len(top_anomalies)})
+            writer({"insight": insight, "index": i + 1, "total": total})
+            return (i, insight)
         except Exception as e:
-            # Log but don't fail the pipeline
             logger.warning("Insight generation failed for anomaly", extra={"index": i, "error": str(e)})
-            # Use anomaly data as fallback insight
             insight = {
                 "title": anomaly.get("finding", f"Issue {i+1}"),
                 "finding": anomaly.get("finding", ""),
@@ -311,9 +311,12 @@ async def insight_generator_node(state: InsightPipelineState) -> dict:
                 "recommendation": anomaly.get("recommendation", ""),
                 "severity": anomaly.get("severity", "medium"),
             }
-            insights.append(insight)
-            writer({"insight": insight, "index": i + 1, "total": len(top_anomalies)})
-            continue
+            writer({"insight": insight, "index": i + 1, "total": total})
+            return (i, insight)
+
+    if top_anomalies:
+        ranked = await asyncio.gather(*[_one(i, a) for i, a in enumerate(top_anomalies)])
+        insights = [ins for _, ins in sorted(ranked, key=lambda t: t[0])]
 
     writer({"status": f"Generated {len(insights)} insight cards"})
     trace = list(state.get("execution_trace", []))

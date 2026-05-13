@@ -5,10 +5,11 @@ Provides the /user/me endpoint (plan lookup from DB) and
 """
 
 import os
+import asyncio
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request
-from services.auth import require_auth
-from services.supabase import get_supabase
+from services.auth import require_auth, resolve_wallet_to_user_id_async
+from services.supabase import get_supabase, sb_execute
 from services.rate_limit import limiter
 from services.helius import verify_payment_transaction
 
@@ -24,35 +25,50 @@ async def get_me(wallet: str = Depends(require_auth)):
     always sees the live subscription state.
     """
     try:
-        from services.auth import resolve_wallet_to_user_id
         supabase = get_supabase()
-        
-        user_id = resolve_wallet_to_user_id(wallet)
-        
+
+        user_id = await resolve_wallet_to_user_id_async(wallet)
+
         if not user_id:
             # Auto-create user row on first access
-            insert = (
+            insert = await sb_execute(
                 supabase.table("users")
                 .upsert({"wallet_pubkey": wallet, "plan": "free"}, on_conflict="wallet_pubkey")
                 .select("id, wallet_pubkey, plan, plan_expires_at, created_at")
-                .execute()
             )
             user = insert.data[0] if insert.data else {"id": None, "wallet_pubkey": wallet, "plan": "free"}
         else:
-            result = (
+            result = await sb_execute(
                 supabase.table("users")
                 .select("id, wallet_pubkey, plan, plan_expires_at, created_at")
                 .eq("id", user_id)
-                .execute()
             )
             user = result.data[0] if result.data else None
 
-        # Count programs and total transactions for usage meters
-        programs_result = (
-            supabase.table("programs")
-            .select("id, name, program_address, last_synced_at, network")
-            .eq("user_id", user["id"])
-            .execute()
+        if not user or not user.get("id"):
+            raise HTTPException(status_code=500, detail="Failed to resolve user profile")
+
+        uid = user["id"]
+
+        programs_result, payments_result, linked_wallets_res = await asyncio.gather(
+            sb_execute(
+                supabase.table("programs")
+                .select("id, name, program_address, last_synced_at, network")
+                .eq("user_id", uid)
+            ),
+            sb_execute(
+                supabase.table("payments")
+                .select("plan, amount_usdc, paid_at, tx_signature")
+                .eq("user_id", uid)
+                .order("paid_at", desc=True)
+                .limit(5)
+            ),
+            sb_execute(
+                supabase.table("linked_wallets")
+                .select("wallet_pubkey, created_at")
+                .eq("user_id", uid)
+                .order("created_at", desc=False)
+            ),
         )
         programs = programs_result.data or []
 
@@ -60,36 +76,15 @@ async def get_me(wallet: str = Depends(require_auth)):
         if programs:
             program_ids = [p["id"] for p in programs]
             try:
-                # Single aggregate query (instead of one count query per program)
-                # to avoid N+1 latency on /user/me for accounts with many programs.
-                txn_count = (
+                txn_count = await sb_execute(
                     supabase.table("transactions")
                     .select("id", count="exact", head=True)
                     .in_("program_id", program_ids)
-                    .execute()
                 )
                 total_txns = txn_count.count or 0
             except Exception:
                 total_txns = 0
 
-        # Fetch payment history
-        payments_result = (
-            supabase.table("payments")
-            .select("plan, amount_usdc, paid_at, tx_signature")
-            .eq("user_id", user["id"])
-            .order("paid_at", desc=True)
-            .limit(5)
-            .execute()
-        )
-
-        # Fetch linked wallets
-        linked_wallets_res = (
-            supabase.table("linked_wallets")
-            .select("wallet_pubkey, created_at")
-            .eq("user_id", user["id"])
-            .order("created_at", desc=False)
-            .execute()
-        )
         linked_wallets = [w["wallet_pubkey"] for w in (linked_wallets_res.data or [])]
 
         return {
@@ -106,6 +101,8 @@ async def get_me(wallet: str = Depends(require_auth)):
             "payment_history": payments_result.data or [],
         }
 
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("Failed to fetch user profile", extra={"error": str(e), "wallet": wallet})
         raise HTTPException(status_code=500, detail="Failed to fetch user profile")
@@ -146,9 +143,8 @@ async def upgrade_plan(
     try:
         supabase = get_supabase()
 
-        from services.auth import resolve_wallet_to_user_id
-        user_id = resolve_wallet_to_user_id(wallet)
-        
+        user_id = await resolve_wallet_to_user_id_async(wallet)
+
         if not user_id:
             raise HTTPException(status_code=404, detail="User not found")
 
@@ -160,18 +156,20 @@ async def upgrade_plan(
 
         # Record payment
         try:
-            supabase.table("payments").insert({
-                "user_id": user_id,
-                "tx_signature": tx_signature,
-                "amount_usdc": amount_usdc,
-                "plan": plan,
-            }).execute()
+            await sb_execute(
+                supabase.table("payments").insert({
+                    "user_id": user_id,
+                    "tx_signature": tx_signature,
+                    "amount_usdc": amount_usdc,
+                    "plan": plan,
+                })
+            )
         except Exception as pay_err:
             # Duplicate signature = already processed — non-fatal
             logger.warning("Payment insert skipped (possible duplicate)", extra={"error": str(pay_err)})
 
         # Upgrade the plan
-        supabase.table("users").update({"plan": plan}).eq("id", user_id).execute()
+        await sb_execute(supabase.table("users").update({"plan": plan}).eq("id", user_id))
         logger.info("Plan upgraded", extra={"wallet": wallet, "plan": plan})
 
         return {"status": "upgraded", "plan": plan, "wallet": wallet}
@@ -187,13 +185,12 @@ async def upgrade_plan(
 async def downgrade_to_free(wallet: str = Depends(require_auth)):
     """Downgrade the authenticated user to the free plan."""
     try:
-        from services.auth import resolve_wallet_to_user_id
-        user_id = resolve_wallet_to_user_id(wallet)
+        user_id = await resolve_wallet_to_user_id_async(wallet)
         if not user_id:
-             raise HTTPException(status_code=404, detail="User not found")
-        
+            raise HTTPException(status_code=404, detail="User not found")
+
         supabase = get_supabase()
-        supabase.table("users").update({"plan": "free"}).eq("id", user_id).execute()
+        await sb_execute(supabase.table("users").update({"plan": "free"}).eq("id", user_id))
         return {"status": "downgraded", "plan": "free"}
     except Exception as e:
         logger.error("Downgrade failed", extra={"error": str(e)})

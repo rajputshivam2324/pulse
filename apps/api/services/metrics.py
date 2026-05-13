@@ -318,63 +318,10 @@ def build_metrics_payload(transactions: list[dict]) -> dict:
     """
     Assemble the complete metrics payload.
     This is the input to the LangGraph AI pipeline.
+
+    Uses a single chronological pass over transactions (see metrics_fast)
+    instead of eight independent full scans.
     """
-    daw_data = compute_daily_active_wallets(transactions, days=30)
-    retention = compute_retention_cohorts(transactions)
-    funnel = compute_transaction_funnel(transactions)
-    drop_off = compute_drop_off_by_type(transactions)
-    per_type_retention = compute_per_type_retention(transactions)
-    activity_heatmap = compute_activity_heatmap(transactions)
-    whales = compute_top_wallets(transactions)
-    drop_off_breakdown = compute_drop_off_breakdown(transactions)
+    from services.metrics_fast import build_metrics_payload_fast
 
-    total_wallets = len(set(t["wallet_address"] for t in transactions))
-    avg_daw = (
-        sum(d["daw"] for d in daw_data) / len(daw_data) if daw_data else 0
-    )
-    d7_retention = next(
-        (r["retention_rate"] for r in retention if r["week_number"] == 1), 0
-    )
-    d30_retention = next(
-        (r["retention_rate"] for r in retention if r["week_number"] == 4), 0
-    )
-    worst_funnel_step = max(
-        funnel[1:], key=lambda x: x["drop_off_rate"], default={}
-    )
-    worst_type = drop_off[0] if drop_off else {}
-    best_first_type = per_type_retention[0] if per_type_retention else {}
-    worst_first_type = per_type_retention[-1] if per_type_retention else {}
-
-    return {
-        "summary": {
-            "total_wallets": total_wallets,
-            "total_transactions": len(transactions),
-            "avg_daily_active_wallets": round(avg_daw, 1),
-            "d7_retention_rate": d7_retention,
-            "d30_retention_rate": d30_retention,
-            "worst_funnel_step": worst_funnel_step.get("step"),
-            "worst_funnel_drop_rate": worst_funnel_step.get("drop_off_rate"),
-            "highest_churn_transaction_type": worst_type.get(
-                "transaction_type"
-            ),
-            "highest_churn_rate": worst_type.get("churn_rate"),
-            "best_first_type_for_retention": best_first_type.get(
-                "first_transaction_type"
-            ),
-            "best_first_type_return_rate": best_first_type.get("return_rate"),
-            "worst_first_type_for_retention": worst_first_type.get(
-                "first_transaction_type"
-            ),
-            "worst_first_type_return_rate": worst_first_type.get(
-                "return_rate"
-            ),
-        },
-        "daw_trend": daw_data[-14:],
-        "retention_cohorts": retention,
-        "funnel": funnel,
-        "drop_off_by_type": drop_off[:5],
-        "per_type_retention": per_type_retention,
-        "activity_heatmap": activity_heatmap,
-        "whales": whales,
-        "drop_off_breakdown": drop_off_breakdown,
-    }
+    return build_metrics_payload_fast(transactions)

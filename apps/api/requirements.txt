@@ -16,6 +16,7 @@ solders
 python-dotenv
 pytest
 pytest-asyncio
+fakeredis[lua]>=2.23
 slowapi
 structlog
 sentry-sdk

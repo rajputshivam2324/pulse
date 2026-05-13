@@ -2,13 +2,14 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { useParams, useRouter } from 'next/navigation'
-import { usePulseStore } from '@/store'
+import { usePulseStore, type MetricsState } from '@/store'
 import {
   MetricCard, HealthScore, DAWChart, FunnelChart, RetentionGrid,
   WalletSegments, ActivityHeatmap, WhaleTable, SignalFeed, DropOffBreakdown,
 } from '@/components/dashboard/Charts'
 import { canAccess } from '@/lib/plans'
 import { buildUpgradeUrl } from '@/lib/upgrade'
+import { runProgramSyncViaQueue } from '@/lib/syncQueue'
 
 const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 
@@ -208,22 +209,15 @@ export default function DashboardPage() {
     if (!user.token || !programId) return
     setSyncing(true); setError(null)
     try {
-      const p = new URLSearchParams()
-      if (force) p.set('force', 'true')
-      if (activeProgram?.name) p.set('program_name', activeProgram.name)
-      const qs = p.toString() ? `?${p.toString()}` : ''
-      const res = await fetch(`${API_BASE}/analytics/sync/${programId}${qs}`, {
-        method: 'POST', headers: { Authorization: `Bearer ${user.token}` },
+      const data = await runProgramSyncViaQueue(API_BASE, user.token, programId, {
+        programName: activeProgram?.name ?? null,
+        force,
       })
-      if (res.ok) {
-        const data = await res.json()
-        setMetrics(programId, data.metrics)
-        setLastSynced(new Date().toLocaleTimeString())
-      } else {
-        const e = await res.json()
-        setError(e.detail || 'Sync failed')
-      }
-    } catch { setError('Sync failed.') } finally { setSyncing(false) }
+      setMetrics(programId, (data.metrics as MetricsState | null) ?? null)
+      setLastSynced(new Date().toLocaleTimeString())
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Sync failed.')
+    } finally { setSyncing(false) }
   }
 
   function copyAddress() {

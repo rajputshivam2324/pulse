@@ -3,6 +3,7 @@ Pulse API — Main FastAPI Application
 AI-Powered Product Analytics for Solana Founders
 """
 
+import asyncio
 import os
 import logging
 import structlog
@@ -74,7 +75,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         log.warning("redis_health_check_failed", error=str(e))
 
+    worker_task: asyncio.Task | None = None
+    if os.getenv("PULSE_SYNC_WORKER_ENABLED", "true").lower() in ("1", "true", "yes"):
+        from services.sync_worker import run_sync_worker_task
+
+        worker_task = asyncio.create_task(run_sync_worker_task(), name="pulse_sync_worker")
+        log.info("sync_worker_started")
+
     yield
+
+    if worker_task:
+        worker_task.cancel()
+        try:
+            await worker_task
+        except asyncio.CancelledError:
+            pass
+        log.info("sync_worker_stopped")
 
     # Graceful shutdown
     await close_redis()

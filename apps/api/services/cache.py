@@ -26,22 +26,31 @@ def _get_redis() -> redis.Redis:
     return _redis_client
 
 
+def get_redis_client() -> redis.Redis:
+    """
+    Public accessor for the shared async Redis client.
+    Used by the sync job queue and other features that need list/stream ops
+    beyond cache_get/cache_set.
+    """
+    return _get_redis()
+
+
 async def cache_get(key: str) -> Optional[Any]:
     """Get a value from cache, returns None if not found."""
-    r = _get_redis()
+    r = get_redis_client()
     value = await r.get(key)
     return json.loads(value) if value else None
 
 
 async def cache_set(key: str, value: Any, ttl_seconds: int = 3600):
     """Set a value in cache with a TTL."""
-    r = _get_redis()
+    r = get_redis_client()
     await r.setex(key, ttl_seconds, json.dumps(value, default=str))
 
 
 async def cache_invalidate(key: str):
     """Delete a key from cache."""
-    r = _get_redis()
+    r = get_redis_client()
     await r.delete(key)
 
 

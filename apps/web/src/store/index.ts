@@ -22,7 +22,7 @@ interface ProgramState {
   lastSyncedAt: string | null
 }
 
-interface MetricsState {
+export interface MetricsState {
   summary: Record<string, unknown> | null
   dawTrend: Record<string, unknown>[]
   retentionCohorts: Record<string, unknown>[]

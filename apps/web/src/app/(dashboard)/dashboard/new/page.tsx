@@ -11,9 +11,10 @@
 import { useState } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
-import { usePulseStore } from '@/store'
+import { usePulseStore, type MetricsState } from '@/store'
 import { PLAN_LIMITS, type PlanType } from '@/lib/plans'
 import { buildUpgradeUrl } from '@/lib/upgrade'
+import { runProgramSyncViaQueue } from '@/lib/syncQueue'
 
 const API_BASE = process.env.NEXT_PUBLIC_FASTAPI_URL || 'http://localhost:8000'
 
@@ -81,24 +82,10 @@ export default function AddProgramPage() {
         throw new Error(errData?.error || `Registration sequence failed (${registerRes.status})`)
       }
 
-      // Step 2: Sync program
-      const res = await fetch(
-        `${API_BASE}/analytics/sync/${programAddress}?program_name=${encodeURIComponent(programName || programAddress)}`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            Authorization: `Bearer ${token}`,
-          },
-        }
-      )
-
-      if (!res.ok) {
-        const errData = await res.json().catch(() => null)
-        throw new Error(errData?.detail || `Sync sequence failed (${res.status})`)
-      }
-
-      const data = await res.json()
+      // Step 2: Sync program (queued on API — returns quickly; worker runs Helius + DB)
+      const data = await runProgramSyncViaQueue(API_BASE, token, programAddress, {
+        programName: programName || programAddress,
+      })
 
       if (data.status === 'no_data') {
         setStatus('error')
@@ -108,7 +95,7 @@ export default function AddProgramPage() {
 
       const transactionsParsed = data.transactionsParsed ?? data.transactions_parsed
       setSyncInfo(`Indexed ${transactionsParsed?.toLocaleString() || 'many'} blocks`)
-      setMetrics(programAddress, data.metrics)
+      setMetrics(programAddress, (data.metrics as MetricsState | null) ?? null)
       setActiveProgram({
         id: programAddress,
         programAddress,

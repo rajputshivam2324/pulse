@@ -32,6 +32,9 @@ def resolve_wallet_to_user_id(wallet_pubkey: str) -> Optional[str]:
     1. Checks if the wallet is a secondary wallet in linked_wallets.
     2. Checks if the wallet is a primary wallet in users.
     Returns the user_id (UUID string) or None.
+
+    Prefer resolve_wallet_to_user_id_async in FastAPI handlers so DB I/O
+    does not block the event loop.
     """
     from services.supabase import get_supabase
     supabase = get_supabase()
@@ -43,6 +46,32 @@ def resolve_wallet_to_user_id(wallet_pubkey: str) -> Optional[str]:
 
     # 2. Check primary users table
     users_res = supabase.table("users").select("id").eq("wallet_pubkey", wallet_pubkey).execute()
+    if users_res.data:
+        return users_res.data[0]["id"]
+
+    return None
+
+
+async def resolve_wallet_to_user_id_async(wallet_pubkey: str) -> Optional[str]:
+    """Async variant: runs Supabase queries off the event loop."""
+    from services.supabase import get_supabase, sb_execute
+
+    supabase = get_supabase()
+    linked_res = await sb_execute(
+        supabase.table("linked_wallets")
+        .select("user_id")
+        .eq("wallet_pubkey", wallet_pubkey)
+        .limit(1)
+    )
+    if linked_res.data:
+        return linked_res.data[0]["user_id"]
+
+    users_res = await sb_execute(
+        supabase.table("users")
+        .select("id")
+        .eq("wallet_pubkey", wallet_pubkey)
+        .limit(1)
+    )
     if users_res.data:
         return users_res.data[0]["id"]
 

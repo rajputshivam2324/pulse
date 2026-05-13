@@ -38,8 +38,8 @@ SOLANA_RPC_URL = (
 HELIUS_PAGE_SIZE = 100
 RPC_SIGNATURE_PAGE_SIZE = 100
 
-# Batch size for RPC fallback requests
-RPC_BATCH_SIZE = 20
+# Parallel in-flight limit for RPC fallback getTransaction (avoid hammering public RPC)
+RPC_TX_CONCURRENCY = int(os.getenv("RPC_TX_CONCURRENCY", "48"))
 
 
 async def get_transactions_for_address(
@@ -47,6 +47,7 @@ async def get_transactions_for_address(
     before: Optional[str] = None,
     after: Optional[str] = None,
     limit: int = 100,
+    client: Optional[httpx.AsyncClient] = None,
 ) -> list[dict]:
     """
     Helius Enhanced Transactions API.
@@ -56,6 +57,9 @@ async def get_transactions_for_address(
 
     Use `after` for incremental sync (fetch transactions newer than a signature).
     Use `before` for historical pagination (older transactions).
+
+    Pass a shared ``client`` from ``get_all_transactions`` to avoid opening a
+    new TLS connection for every page.
     """
     url = f"{HELIUS_BASE}/addresses/{address}/transactions"
     params = {"api-key": HELIUS_API_KEY, "limit": limit}
@@ -64,6 +68,10 @@ async def get_transactions_for_address(
     if after:
         params["after"] = after
 
+    own_client = client is None
+    if own_client:
+        client = httpx.AsyncClient(timeout=30.0)
+
     @retry(
         stop=stop_after_attempt(3),
         wait=wait_exponential(multiplier=1, min=2, max=10),
@@ -71,21 +79,24 @@ async def get_transactions_for_address(
         reraise=True,
     )
     async def _fetch_with_retry():
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            response = await client.get(url, params=params)
-            try:
-                response.raise_for_status()
-            except httpx.HTTPStatusError as e:
-                if "Failed to find events within the search period" in e.response.text or "not found" in e.response.text.lower():
-                    return []
-                raise
-            return response.json()
+        assert client is not None
+        response = await client.get(url, params=params)
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            if "Failed to find events within the search period" in e.response.text or "not found" in e.response.text.lower():
+                return []
+            raise
+        return response.json()
 
     try:
         return await _fetch_with_retry()
     except httpx.TimeoutException as e:
         logger.error(f"Helius API timeout after 3 retries for address {address}")
         raise
+    finally:
+        if own_client and client is not None:
+            await client.aclose()
 
 
 async def get_all_transactions(
@@ -104,33 +115,35 @@ async def get_all_transactions(
     seen_signatures = set()
     before = None
 
-    for _ in range(max_pages):
-        batch = await get_transactions_for_address(
-            address,
-            before=before,
-            after=after,
-            limit=HELIUS_PAGE_SIZE,
-        )
-        if not batch:
-            break
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        for _ in range(max_pages):
+            batch = await get_transactions_for_address(
+                address,
+                before=before,
+                after=after,
+                limit=HELIUS_PAGE_SIZE,
+                client=client,
+            )
+            if not batch:
+                break
 
-        new_batch = []
-        for txn in batch:
-            signature = txn.get("signature")
-            if signature and signature not in seen_signatures:
-                seen_signatures.add(signature)
-                new_batch.append(txn)
+            new_batch = []
+            for txn in batch:
+                signature = txn.get("signature")
+                if signature and signature not in seen_signatures:
+                    seen_signatures.add(signature)
+                    new_batch.append(txn)
 
-        if not new_batch:
-            break
+            if not new_batch:
+                break
 
-        all_txns.extend(new_batch)
-        last_sig = batch[-1].get("signature")
-        if not last_sig:
-            break
-        before = last_sig
-        if len(batch) < HELIUS_PAGE_SIZE:
-            break
+            all_txns.extend(new_batch)
+            last_sig = batch[-1].get("signature")
+            if not last_sig:
+                break
+            before = last_sig
+            if len(batch) < HELIUS_PAGE_SIZE:
+                break
 
     # Fallback: if Helius returns nothing and we're on devnet, use Solana RPC
     if not all_txns and SOLANA_NETWORK == "devnet":
@@ -174,7 +187,7 @@ async def _fallback_rpc_transactions(
     Fallback: fetch transactions via Solana RPC when Helius has no data.
     Uses getSignaturesForAddress + getTransaction to build enhanced-like objects.
 
-    Batches getTransaction calls in groups of RPC_BATCH_SIZE for efficiency.
+    All getTransaction calls run concurrently up to RPC_TX_CONCURRENCY in flight.
     """
     async with httpx.AsyncClient(timeout=60.0) as client:
         # Step 1: Get signatures, paging with `before` and preserving the
@@ -222,24 +235,22 @@ async def _fallback_rpc_transactions(
         if not signatures:
             return []
 
-        # Step 2: Batch RPC calls — process in groups of RPC_BATCH_SIZE
-        results = []
+        # Step 2: getTransaction for each signature — bounded parallel concurrency
         sig_list = [s["signature"] for s in signatures]
+        sem = asyncio.Semaphore(RPC_TX_CONCURRENCY)
 
-        for i in range(0, len(sig_list), RPC_BATCH_SIZE):
-            batch_sigs = sig_list[i : i + RPC_BATCH_SIZE]
-            # Fire all requests in the batch concurrently
-            batch_results = await asyncio.gather(
-                *[
-                    _fetch_single_rpc_tx(client, sig)
-                    for sig in batch_sigs
-                ],
-                return_exceptions=True,
-            )
-            for result in batch_results:
-                if isinstance(result, dict):  # success
-                    results.append(result)
-                # Silently skip errors and exceptions — partial batch is fine
+        async def _bounded_fetch(sig: str):
+            async with sem:
+                return await _fetch_single_rpc_tx(client, sig)
+
+        batch_results = await asyncio.gather(
+            *(_bounded_fetch(sig) for sig in sig_list),
+            return_exceptions=True,
+        )
+        results = []
+        for result in batch_results:
+            if isinstance(result, dict):
+                results.append(result)
 
         return results
 

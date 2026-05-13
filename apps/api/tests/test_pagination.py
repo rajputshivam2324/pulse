@@ -15,7 +15,7 @@ def test_helius_incremental_cursor_is_preserved_across_pages(monkeypatch):
     """Incremental Helius pagination must not drop `after` after page 1."""
     calls = []
 
-    async def fake_get_transactions_for_address(address, before=None, after=None, limit=100):
+    async def fake_get_transactions_for_address(address, before=None, after=None, limit=100, client=None):
         calls.append({"address": address, "before": before, "after": after, "limit": limit})
         if len(calls) == 1:
             return [{"signature": f"sig_1_{i}", "timestamp": 100 - i} for i in range(100)]

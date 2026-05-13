@@ -11,12 +11,12 @@ import os
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 from services.rate_limit import limiter
-from services.auth import require_auth, resolve_wallet_to_user_id
+from services.auth import require_auth, resolve_wallet_to_user_id_async
 from services.ai.graph import insight_pipeline
 from services.ai.state import InsightPipelineState
 from services.cache import cache_get, cache_set, metrics_cache_key, insights_cache_key
 from services.validators import is_valid_solana_address
-from services.supabase import get_supabase
+from services.supabase import get_supabase, sb_execute
 import json
 import uuid
 
@@ -29,37 +29,34 @@ AI_INSIGHTS_PLANS = {"team", "protocol"}
 INSIGHT_PIPELINE_TIMEOUT_SECONDS = float(os.getenv("INSIGHT_PIPELINE_TIMEOUT_SECONDS", "60"))
 
 
-async def _check_plan_feature(wallet: str, feature: str) -> bool:
-    """Look up the user's plan from Supabase and check feature access.
-    Resolves linked wallets to their primary user before checking plan."""
+async def _user_has_ai_insights_plan(user_id: str) -> bool:
+    """Look up plan from Supabase. Team and Protocol unlock AI insights."""
     try:
         supabase = get_supabase()
-        user_id = resolve_wallet_to_user_id(wallet)
-        if not user_id:
-            return False
-        result = supabase.table("users").select("plan").eq("id", user_id).execute()
+        result = await sb_execute(
+            supabase.table("users").select("plan").eq("id", user_id).limit(1)
+        )
         if not result.data:
             return False
         plan = result.data[0].get("plan", "free")
         return plan in AI_INSIGHTS_PLANS
     except Exception:
-        logger.warning("Plan check failed, defaulting to deny", extra={"wallet": wallet})
+        logger.warning("Plan check failed, defaulting to deny", extra={"user_id": user_id})
         return False
 
 
-def _resolve_user_and_program(wallet: str, program_id: str):
+async def _resolve_user_and_program(wallet: str, program_id: str):
     """Resolve authenticated wallet to primary user and owned program row."""
     supabase = get_supabase()
-    user_id = resolve_wallet_to_user_id(wallet)
+    user_id = await resolve_wallet_to_user_id_async(wallet)
     if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
-    program_row = (
+    program_row = await sb_execute(
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
         .eq("user_id", user_id)
-        .execute()
     )
     if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
@@ -208,22 +205,21 @@ async def generate_insights(
 
     # Ownership check — resolve linked wallets to primary user
     supabase = get_supabase()
-    user_id = resolve_wallet_to_user_id(wallet)
+    user_id = await resolve_wallet_to_user_id_async(wallet)
     if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
-    program_row = (
+    program_row = await sb_execute(
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
         .eq("user_id", user_id)
-        .execute()
     )
     if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
     # Server-side plan check
-    has_access = await _check_plan_feature(wallet, "ai_insights")
+    has_access = await _user_has_ai_insights_plan(user_id)
     if not has_access:
         raise HTTPException(
             status_code=403,
@@ -298,28 +294,29 @@ async def generate_insights(
     # ── Persist insight report for history ──
     try:
         program_db_id = program_row.data[0]["id"]
-        supabase.table("insight_reports").insert({
-            "program_id": program_db_id,
-            "health_score": output.get("health_score"),
-            "headline": output.get("headline"),
-            "full_json": output,
-        }).execute()
+        await sb_execute(
+            supabase.table("insight_reports").insert({
+                "program_id": program_db_id,
+                "health_score": output.get("health_score"),
+                "headline": output.get("headline"),
+                "full_json": output,
+            })
+        )
 
         # Prune: keep max 10 reports per program, delete the rest.
         # IMPORTANT: never fetch all rows (can grow unbounded and slow down requests).
-        old_reports = (
+        old_reports = await sb_execute(
             supabase.table("insight_reports")
             .select("id")
             .eq("program_id", program_db_id)
             .order("generated_at", desc=True)
             .range(10, 60)  # delete up to 51 old rows per request; avoids unbounded select
-            .execute()
         )
         if old_reports.data:
             old_ids = [r.get("id") for r in old_reports.data if r.get("id")]
             if old_ids:
                 # Batch delete (Supabase supports `in` filter)
-                supabase.table("insight_reports").delete().in_("id", old_ids).execute()
+                await sb_execute(supabase.table("insight_reports").delete().in_("id", old_ids))
     except Exception as e:
         logger.warning("Failed to persist insight report: %s", str(e))
 
@@ -334,22 +331,21 @@ async def get_insights(program_id: str, wallet: str = Depends(require_auth)):
 
     # Ownership check — resolve linked wallets to primary user
     supabase = get_supabase()
-    user_id = resolve_wallet_to_user_id(wallet)
+    user_id = await resolve_wallet_to_user_id_async(wallet)
     if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
-    program_row = (
+    program_row = await sb_execute(
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
         .eq("user_id", user_id)
-        .execute()
     )
     if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
     # Plan gate — same requirement as /generate
-    has_access = await _check_plan_feature(wallet, "ai_insights")
+    has_access = await _user_has_ai_insights_plan(user_id)
     if not has_access:
         raise HTTPException(
             status_code=403,
@@ -375,28 +371,26 @@ async def get_insight_history(
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
 
     supabase = get_supabase()
-    user_id = resolve_wallet_to_user_id(wallet)
+    user_id = await resolve_wallet_to_user_id_async(wallet)
     if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
-    program_row = (
+    program_row = await sb_execute(
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
         .eq("user_id", user_id)
-        .execute()
     )
     if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
     try:
-        result = (
+        result = await sb_execute(
             supabase.table("insight_reports")
             .select("id, generated_at, health_score, headline")
             .eq("program_id", program_row.data[0]["id"])
             .order("generated_at", desc=True)
             .limit(10)
-            .execute()
         )
         return {"reports": result.data or []}
     except Exception as e:
@@ -460,24 +454,23 @@ async def followup_question(
     if not is_valid_solana_address(program_id):
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
 
-    has_access = await _check_plan_feature(wallet, "ai_insights")
+    supabase = get_supabase()
+    user_id = await resolve_wallet_to_user_id_async(wallet)
+    if not user_id:
+        raise HTTPException(status_code=401, detail="User not found.")
+
+    has_access = await _user_has_ai_insights_plan(user_id)
     if not has_access:
         raise HTTPException(
             status_code=403,
             detail="AI follow-up requires a Team or Protocol plan.",
         )
 
-    supabase = get_supabase()
-    user_id = resolve_wallet_to_user_id(wallet)
-    if not user_id:
-        raise HTTPException(status_code=401, detail="User not found.")
-
-    program_row = (
+    program_row = await sb_execute(
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
         .eq("user_id", user_id)
-        .execute()
     )
     if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
@@ -507,21 +500,19 @@ async def followup_question(
     if thread_id:
         try:
             # Verify thread ownership
-            thread_check = (
+            thread_check = await sb_execute(
                 supabase.table("insight_chat_threads")
                 .select("id")
                 .eq("id", thread_id)
                 .eq("user_id", user_id)
-                .execute()
             )
             if thread_check.data:
                 # Get previous messages
-                msgs_res = (
+                msgs_res = await sb_execute(
                     supabase.table("insight_chat_messages")
                     .select("role, content")
                     .eq("thread_id", thread_id)
                     .order("created_at", desc=False)
-                    .execute()
                 )
                 conversation_history = msgs_res.data if msgs_res.data else []
         except Exception as e:
@@ -546,27 +537,25 @@ async def get_followup_threads(program_id: str, wallet: str = Depends(require_au
     if not is_valid_solana_address(program_id):
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
 
-    supabase, user_id, program = _resolve_user_and_program(wallet, program_id)
+    supabase, user_id, program = await _resolve_user_and_program(wallet, program_id)
     try:
-        threads_res = (
+        threads_res = await sb_execute(
             supabase.table("insight_chat_threads")
             .select("id, title, created_at, updated_at")
             .eq("user_id", user_id)
             .eq("program_id", program["id"])
             .order("updated_at", desc=True)
-            .execute()
         )
         threads = threads_res.data or []
         if not threads:
             return {"threads": []}
 
         thread_ids = [t["id"] for t in threads]
-        messages_res = (
+        messages_res = await sb_execute(
             supabase.table("insight_chat_messages")
             .select("thread_id, role, content, created_at")
             .in_("thread_id", thread_ids)
             .order("created_at", desc=False)
-            .execute()
         )
         by_thread = {}
         for msg in (messages_res.data or []):
@@ -604,7 +593,7 @@ async def create_followup_thread(
     if not is_valid_solana_address(program_id):
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
 
-    supabase, user_id, program = _resolve_user_and_program(wallet, program_id)
+    supabase, user_id, program = await _resolve_user_and_program(wallet, program_id)
     try:
         body = await request.json()
     except Exception:
@@ -615,7 +604,7 @@ async def create_followup_thread(
         title = title[:120]
 
     try:
-        res = (
+        res = await sb_execute(
             supabase.table("insight_chat_threads")
             .insert({
                 "user_id": user_id,
@@ -623,7 +612,6 @@ async def create_followup_thread(
                 "title": title,
             })
             .select("id, title, created_at, updated_at")
-            .execute()
         )
         thread = res.data[0] if res.data else None
         if not thread:
@@ -644,7 +632,7 @@ async def append_followup_message(
     if not is_valid_solana_address(program_id):
         raise HTTPException(status_code=400, detail="Invalid Solana address format")
 
-    supabase, user_id, program = _resolve_user_and_program(wallet, program_id)
+    supabase, user_id, program = await _resolve_user_and_program(wallet, program_id)
     try:
         body = await request.json()
     except Exception:
@@ -662,27 +650,30 @@ async def append_followup_message(
         raise HTTPException(status_code=400, detail="content is required.")
 
     # Verify thread ownership by user+program.
-    thread_res = (
+    thread_res = await sb_execute(
         supabase.table("insight_chat_threads")
         .select("id, user_id, program_id")
         .eq("id", thread_id)
         .eq("user_id", user_id)
         .eq("program_id", program["id"])
         .maybe_single()
-        .execute()
     )
     if not thread_res.data:
         raise HTTPException(status_code=403, detail="Invalid thread for this program.")
 
     try:
-        supabase.table("insight_chat_messages").insert({
-            "thread_id": thread_id,
-            "role": role,
-            "content": content,
-        }).execute()
-        supabase.table("insight_chat_threads").update({
-            "updated_at": datetime.now(timezone.utc).isoformat(),
-        }).eq("id", thread_id).execute()
+        await sb_execute(
+            supabase.table("insight_chat_messages").insert({
+                "thread_id": thread_id,
+                "role": role,
+                "content": content,
+            })
+        )
+        await sb_execute(
+            supabase.table("insight_chat_threads").update({
+                "updated_at": datetime.now(timezone.utc).isoformat(),
+            }).eq("id", thread_id)
+        )
         return {"status": "ok"}
     except Exception as e:
         logger.error("Failed to persist follow-up message: %s", str(e))
@@ -714,22 +705,21 @@ async def generate_insights_stream(
 
     # Ownership check
     supabase = get_supabase()
-    user_id = resolve_wallet_to_user_id(wallet)
+    user_id = await resolve_wallet_to_user_id_async(wallet)
     if not user_id:
         raise HTTPException(status_code=401, detail="User not found.")
 
-    program_row = (
+    program_row = await sb_execute(
         supabase.table("programs")
         .select("id, user_id")
         .eq("program_address", program_id)
         .eq("user_id", user_id)
-        .execute()
     )
     if not program_row.data:
         raise HTTPException(status_code=403, detail="You do not own this program.")
 
     # Plan gate
-    has_access = await _check_plan_feature(wallet, "ai_insights")
+    has_access = await _user_has_ai_insights_plan(user_id)
     if not has_access:
         raise HTTPException(
             status_code=403,
@@ -862,25 +852,26 @@ async def generate_insights_stream(
         # Persist insight report for history (same as /generate)
         try:
             program_db_id = program_row.data[0]["id"]
-            supabase.table("insight_reports").insert({
-                "program_id": program_db_id,
-                "health_score": output.get("health_score"),
-                "headline": output.get("headline"),
-                "full_json": output,
-            }).execute()
+            await sb_execute(
+                supabase.table("insight_reports").insert({
+                    "program_id": program_db_id,
+                    "health_score": output.get("health_score"),
+                    "headline": output.get("headline"),
+                    "full_json": output,
+                })
+            )
 
-            old_reports = (
+            old_reports = await sb_execute(
                 supabase.table("insight_reports")
                 .select("id")
                 .eq("program_id", program_db_id)
                 .order("generated_at", desc=True)
                 .range(10, 60)
-                .execute()
             )
             if old_reports.data:
                 old_ids = [r.get("id") for r in old_reports.data if r.get("id")]
                 if old_ids:
-                    supabase.table("insight_reports").delete().in_("id", old_ids).execute()
+                    await sb_execute(supabase.table("insight_reports").delete().in_("id", old_ids))
         except Exception as e:
             logger.warning("Failed to persist streamed insight report: %s", str(e))
 
