@@ -56,9 +56,13 @@ async def run_sync_worker_task() -> None:
                     detail = str(detail)
                 await mark_sync_job_failed(job_id, detail)
             except httpx.HTTPStatusError as e:
+                code = e.response.status_code
+                hint = ""
+                if code == 429:
+                    hint = " (Helius rate limit — wait a few minutes, increase HELIUS_PAGE_DELAY_SEC, or upgrade Helius plan)"
                 await mark_sync_job_failed(
                     job_id,
-                    f"Upstream HTTP error ({e.response.status_code})",
+                    f"Upstream HTTP error ({code}){hint}",
                 )
             except Exception as e:
                 await mark_sync_job_failed(job_id, str(e))

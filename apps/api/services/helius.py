@@ -12,7 +12,7 @@ import httpx
 import os
 import logging
 from typing import Optional
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
 
 logger = logging.getLogger(__name__)
 
@@ -40,6 +40,18 @@ RPC_SIGNATURE_PAGE_SIZE = 100
 
 # Parallel in-flight limit for RPC fallback getTransaction (avoid hammering public RPC)
 RPC_TX_CONCURRENCY = int(os.getenv("RPC_TX_CONCURRENCY", "48"))
+
+# Pause between Helius pagination calls to reduce 429 bursts (sync worker).
+HELIUS_PAGE_DELAY_SEC = float(os.getenv("HELIUS_PAGE_DELAY_SEC", "0.25"))
+
+
+def _helius_retryable(exc: BaseException) -> bool:
+    """Helius often returns 429 under burst pagination; also retry transient 5xx."""
+    if isinstance(exc, (httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)):
+        return True
+    if isinstance(exc, httpx.HTTPStatusError):
+        return exc.response.status_code in (429, 502, 503, 504)
+    return False
 
 
 async def get_transactions_for_address(
@@ -73,9 +85,9 @@ async def get_transactions_for_address(
         client = httpx.AsyncClient(timeout=30.0)
 
     @retry(
-        stop=stop_after_attempt(3),
-        wait=wait_exponential(multiplier=1, min=2, max=10),
-        retry=retry_if_exception_type((httpx.TimeoutException, httpx.ConnectError, httpx.NetworkError)),
+        stop=stop_after_attempt(6),
+        wait=wait_exponential(multiplier=1, min=2, max=90),
+        retry=retry_if_exception(_helius_retryable),
         reraise=True,
     )
     async def _fetch_with_retry():
@@ -116,7 +128,9 @@ async def get_all_transactions(
     before = None
 
     async with httpx.AsyncClient(timeout=30.0) as client:
-        for _ in range(max_pages):
+        for page_idx in range(max_pages):
+            if page_idx > 0 and HELIUS_PAGE_DELAY_SEC > 0:
+                await asyncio.sleep(HELIUS_PAGE_DELAY_SEC)
             batch = await get_transactions_for_address(
                 address,
                 before=before,
