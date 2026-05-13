@@ -4,6 +4,7 @@ Handles transaction syncing, metrics computation, and data retrieval.
 All endpoints require JWT authentication.
 """
 
+import asyncio
 import httpx
 import logging
 import os
@@ -36,6 +37,8 @@ SUPABASE_PAGE_SIZE = 1000
 # Signature-only pages are tiny per row — use a larger range to cut round trips.
 SUPABASE_SIGNATURE_PAGE_SIZE = 4000
 UPSERT_CHUNK_SIZE = int(os.getenv("SUPABASE_UPSERT_CHUNK", "400"))
+# Concurrent PostgREST range reads — cuts wall time vs sequential pagination.
+SUPABASE_FETCH_CONCURRENCY = max(1, int(os.getenv("SUPABASE_FETCH_CONCURRENCY", "4")))
 
 
 def _sort_transactions_newest_first(txns: list[dict]) -> list[dict]:
@@ -82,27 +85,30 @@ async def _fetch_existing_transactions_from_supabase(
 ) -> list[dict]:
     """
     Fetch persisted transactions with explicit Supabase range pagination.
-    This keeps incremental sync correct even when the Redis cache has expired.
+    Uses concurrent range windows to reduce wall time vs a single sequential scan.
     """
-    existing = []
+    existing: list[dict] = []
     offset = 0
+    page_size = SUPABASE_PAGE_SIZE
+    conc = SUPABASE_FETCH_CONCURRENCY
 
     while True:
-        response = await sb_execute(
-            supabase.table("transactions")
-            .select("signature,wallet_address,transaction_type,timestamp,amount_sol,token_mint")
-            .eq("program_id", program_id)
-            .order("timestamp", desc=True)
-            .range(offset, offset + SUPABASE_PAGE_SIZE - 1)
+        offsets = [offset + i * page_size for i in range(conc)]
+        pages = await asyncio.gather(
+            *[
+                _fetch_transactions_slice_from_supabase(
+                    supabase, program_id, program_address, off, page_size
+                )
+                for off in offsets
+            ]
         )
-        page = response.data or []
-        if not page:
+        if not any(pages):
             break
-
-        existing.extend(_db_txn_to_parsed(row, program_address) for row in page)
-        if len(page) < SUPABASE_PAGE_SIZE:
+        for page in pages:
+            existing.extend(page)
+        if len(pages[-1]) < page_size:
             break
-        offset += SUPABASE_PAGE_SIZE
+        offset += conc * page_size
 
     return existing
 
@@ -128,28 +134,54 @@ async def _fetch_transactions_slice_from_supabase(
     return [_db_txn_to_parsed(row, program_address) for row in page]
 
 
+async def _fetch_signatures_slice_from_supabase(
+    supabase,
+    program_id: str,
+    offset: int,
+    limit: int,
+) -> list[str]:
+    """One signatures-only page (newest-first), for parallel pagination."""
+    if limit <= 0:
+        return []
+    response = await sb_execute(
+        supabase.table("transactions")
+        .select("signature")
+        .eq("program_id", program_id)
+        .order("timestamp", desc=True)
+        .range(offset, offset + limit - 1)
+    )
+    page = response.data or []
+    out: list[str] = []
+    for row in page:
+        s = row.get("signature")
+        if s:
+            out.append(s)
+    return out
+
+
 async def _fetch_existing_signatures_from_supabase(supabase, program_id: str) -> set[str]:
     """Return all known signatures for a program (minimal columns — fast to transfer)."""
     sigs: set[str] = set()
     offset = 0
+    page_size = SUPABASE_SIGNATURE_PAGE_SIZE
+    conc = SUPABASE_FETCH_CONCURRENCY
+
     while True:
-        response = await sb_execute(
-            supabase.table("transactions")
-            .select("signature")
-            .eq("program_id", program_id)
-            .order("timestamp", desc=True)
-            .range(offset, offset + SUPABASE_SIGNATURE_PAGE_SIZE - 1)
+        offsets = [offset + i * page_size for i in range(conc)]
+        pages = await asyncio.gather(
+            *[
+                _fetch_signatures_slice_from_supabase(supabase, program_id, off, page_size)
+                for off in offsets
+            ]
         )
-        page = response.data or []
-        if not page:
+        if not any(pages):
             break
-        for row in page:
-            s = row.get("signature")
-            if s:
-                sigs.add(s)
-        if len(page) < SUPABASE_SIGNATURE_PAGE_SIZE:
+        for page in pages:
+            sigs.update(page)
+        if len(pages[-1]) < page_size:
             break
-        offset += SUPABASE_SIGNATURE_PAGE_SIZE
+        offset += conc * page_size
+
     return sigs
 
 

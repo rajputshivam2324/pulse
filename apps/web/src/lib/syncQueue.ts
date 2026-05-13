@@ -39,7 +39,8 @@ export async function pollSyncJob(
   jobId: string,
   opts?: { intervalMs?: number; maxWaitMs?: number }
 ): Promise<SyncJobPublic> {
-  const intervalMs = opts?.intervalMs ?? 1500
+  /** Poll frequently so the UI picks up completion quickly (under job GET rate limit). */
+  const intervalMs = opts?.intervalMs ?? 800
   const maxWaitMs = opts?.maxWaitMs ?? 900_000
   const start = Date.now()
   while (Date.now() - start < maxWaitMs) {
