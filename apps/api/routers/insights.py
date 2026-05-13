@@ -27,6 +27,8 @@ logger = logging.getLogger(__name__)
 AI_INSIGHTS_PLANS = {"team", "protocol"}
 # Increased from 25s to 60s to allow multiple LLM calls to complete
 INSIGHT_PIPELINE_TIMEOUT_SECONDS = float(os.getenv("INSIGHT_PIPELINE_TIMEOUT_SECONDS", "60"))
+# slowapi: per JWT wallet (see services.rate_limit.key_func). "Execute scan" hits generate_stream.
+INSIGHTS_GENERATE_RATE_LIMIT = os.getenv("INSIGHTS_GENERATE_RATE_LIMIT", "30/hour")
 
 
 async def _user_has_ai_insights_plan(user_id: str) -> bool:
@@ -185,7 +187,7 @@ def _fallback_insights(metrics: dict, program_name: str | None) -> dict:
 
 
 @router.post("/generate/{program_id}")
-@limiter.limit("5/hour")
+@limiter.limit(INSIGHTS_GENERATE_RATE_LIMIT)
 async def generate_insights(
     request: Request,
     program_id: str,
@@ -681,7 +683,7 @@ async def append_followup_message(
 
 
 @router.post("/generate_stream/{program_id}")
-@limiter.limit("5/hour")
+@limiter.limit(INSIGHTS_GENERATE_RATE_LIMIT)
 async def generate_insights_stream(
     request: Request,
     program_id: str,
